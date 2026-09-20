@@ -31,6 +31,20 @@ class FlywayMigrationTest {
     }
 
     @Test
+    void migrationCreatesCheckpointTables() {
+        // V2__checkpoint.sql：PostgresSaver 的存储表（checkpoint 级联删除依赖 FK）
+        Integer count = jdbcTemplate.queryForObject(
+            "select count(*) from information_schema.tables where table_name in ('graphthread','graphcheckpoint')",
+            Integer.class);
+        assertThat(count).isEqualTo(2);
+
+        String fk = jdbcTemplate.queryForObject(
+            "select pg_get_constraintdef(oid) from pg_constraint where conname = 'fk_thread'",
+            String.class);
+        assertThat(fk).contains("ON DELETE CASCADE");
+    }
+
+    @Test
     void messageTypeCheckContainsAllTypes() {
         String types = jdbcTemplate.queryForObject(
             "select pg_get_constraintdef(oid) from pg_constraint where conname = 'message_msg_type_check'",

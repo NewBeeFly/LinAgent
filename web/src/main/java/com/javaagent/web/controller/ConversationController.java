@@ -1,5 +1,6 @@
 package com.javaagent.web.controller;
 
+import com.javaagent.agent.persistence.CheckpointCleaner;
 import com.javaagent.agent.persistence.Conversation;
 import com.javaagent.agent.persistence.ConversationRepository;
 import com.javaagent.agent.persistence.MessageRepository;
@@ -20,12 +21,15 @@ public class ConversationController {
     private final ConversationRepository conversations;
     private final TurnRepository turns;
     private final MessageRepository messages;
+    private final CheckpointCleaner checkpointCleaner;
 
     public ConversationController(ConversationRepository conversations,
-                                  TurnRepository turns, MessageRepository messages) {
+                                  TurnRepository turns, MessageRepository messages,
+                                  CheckpointCleaner checkpointCleaner) {
         this.conversations = conversations;
         this.turns = turns;
         this.messages = messages;
+        this.checkpointCleaner = checkpointCleaner;
     }
 
     @PostMapping
@@ -58,7 +62,12 @@ public class ConversationController {
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable Long id) {
-        // 级联删除由 PG 外键 ON DELETE CASCADE 承担（turn/message；checkpoint 表由 Task 10 处理）
-        conversations.findById(id).ifPresent(c -> conversations.deleteById(id));
+        // 级联删除：turn/message 由 PG 外键 ON DELETE CASCADE 承担；
+        // checkpoint（graphthread/graphcheckpoint）由 CheckpointCleaner 按 threadId 模式清理。
+        // 先清 checkpoint 再删会话行：中途失败时重试安全（会话仍在，幂等清理）。
+        conversations.findById(id).ifPresent(c -> {
+            checkpointCleaner.deleteByConversationId(id);
+            conversations.deleteById(id);
+        });
     }
 }
