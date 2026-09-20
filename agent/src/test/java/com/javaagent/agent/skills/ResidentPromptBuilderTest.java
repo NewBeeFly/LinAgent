@@ -3,8 +3,14 @@ package com.javaagent.agent.skills;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -81,6 +87,43 @@ class ResidentPromptBuilderTest {
             # 未再次失效时的新正文
             """);
         assertThat(builder.build()).isSameAs(rebuilt);
+    }
+
+    @Test
+    void readTemplateReadsClasspathResourceLivingInJarViaStream() throws Exception {
+        // fat-jar 场景：模板资源以 jar:URL 暴露，getFile() 无法转 Path，必须 openStream 读取
+        Path jar = tempDir.resolve("templates.jar");
+        try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar))) {
+            out.putNextEntry(new JarEntry("prompts/jar-template.md"));
+            out.write("jar 内模板\n{resident_skills}".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        try (URLClassLoader loader = new URLClassLoader(new URL[]{ jar.toUri().toURL() }, null)) {
+            String template = ResidentPromptBuilder.readTemplate("prompts/jar-template.md", loader);
+            assertThat(template).contains("jar 内模板").contains("{resident_skills}");
+        }
+    }
+
+    @Test
+    void readTemplateFallsBackToFilesystemWhenClasspathMisses() throws Exception {
+        // 自定义模板走文件系统：绝对路径不在 classpath，回退 Files.readString
+        Path template = tempDir.resolve("custom-prompt.md");
+        Files.writeString(template, "自定义模板 {resident_skills}");
+        assertThat(ResidentPromptBuilder.readTemplate(template.toString(), getClass().getClassLoader()))
+            .contains("自定义模板");
+    }
+
+    @Test
+    void buildResolvesDefaultTemplateFromClasspathWhenNotAFileOnDisk() throws Exception {
+        // 默认模板 prompts/system-prompt.md 位于 agent 模块 classpath（非工作目录文件）：
+        // classpath 优先解析（与 fat-jar 内同一路径），占位符替换照常
+        ResidentPromptBuilder builder = new ResidentPromptBuilder(
+            new SkillManifestScanner(), writeSkills().toString(), "prompts/system-prompt.md");
+
+        assertThat(builder.build())
+            .contains("javaAgent")
+            .contains("### 技能：resident-skill")
+            .doesNotContain("{resident_skills}");
     }
 
     private Path writeSkills() throws Exception {

@@ -4,6 +4,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -18,7 +21,7 @@ public class ResidentPromptBuilder {
 
     private final SkillManifestScanner scanner;
     private final Path skillsRoot;
-    private final Path promptTemplate;
+    private final String promptTemplate;
     private volatile String cached;
 
     public ResidentPromptBuilder(SkillManifestScanner scanner,
@@ -26,15 +29,23 @@ public class ResidentPromptBuilder {
                                  @Value("${agent.prompt-template:prompts/system-prompt.md}") String promptTemplate) {
         this.scanner = scanner;
         this.skillsRoot = Path.of(skillsRoot);
-        this.promptTemplate = Path.of(promptTemplate).isAbsolute()
-            ? Path.of(promptTemplate)
-            : classpathOrFile(promptTemplate);
+        this.promptTemplate = promptTemplate;
         this.cached = build();
     }
 
-    private Path classpathOrFile(String path) {
-        var resource = getClass().getClassLoader().getResource(path);
-        return resource != null ? Path.of(resource.getFile()) : Path.of(path);
+    /**
+     * 模板读取：classpath 优先（UTF-8 流式），文件系统回退。
+     * fat-jar 场景下资源以 jar:URL 暴露，URL.getFile() 不是合法文件路径
+     * （Path.of 抛异常），必须经 openStream 读取——Task 12 实测坑点。
+     */
+    static String readTemplate(String path, ClassLoader classLoader) throws IOException {
+        URL resource = classLoader.getResource(path);
+        if (resource != null) {
+            try (InputStream in = resource.openStream()) {
+                return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        }
+        return Files.readString(Path.of(path));
     }
 
     public String build() {
@@ -43,7 +54,7 @@ public class ResidentPromptBuilder {
             return snapshot;
         }
         try {
-            String template = Files.readString(promptTemplate);
+            String template = readTemplate(promptTemplate, getClass().getClassLoader());
             List<SkillDefinition> resident = scanner.scan(skillsRoot).stream()
                 .filter(SkillDefinition::resident).toList();
             String block = resident.stream()
