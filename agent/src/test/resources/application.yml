@@ -1,0 +1,14 @@
+# agent 模块测试专用配置（仅 test classpath，不会打进 agent jar，也不影响 web 模块配置）。
+# api-key 不入库，运行 manual 探针时通过环境变量 STEPFUN_API_KEY 注入。
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/javaagent
+    username: jiege
+    password: ***REMOVED***
+  ai:
+    openai:
+      api-key: ${STEPFUN_API_KEY:}
+      base-url: https://api.stepfun.com/step_plan
+      chat:
+        options:
+          model: step-3.7-flash
