@@ -1,0 +1,62 @@
+package com.javaagent.agent.skills;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * 常驻技能全文（拼入 system prompt 静态区）。system prompt 模板文件化，
+ * {resident_skills} 占位符在加载时替换，结果缓存（invalidateCache 供 autoReload 场景重扫）。
+ */
+@Component
+public class ResidentPromptBuilder {
+
+    private final SkillManifestScanner scanner;
+    private final Path skillsRoot;
+    private final Path promptTemplate;
+    private volatile String cached;
+
+    public ResidentPromptBuilder(SkillManifestScanner scanner,
+                                 @Value("${agent.skills-root:./skills}") String skillsRoot,
+                                 @Value("${agent.prompt-template:prompts/system-prompt.md}") String promptTemplate) {
+        this.scanner = scanner;
+        this.skillsRoot = Path.of(skillsRoot);
+        this.promptTemplate = Path.of(promptTemplate).isAbsolute()
+            ? Path.of(promptTemplate)
+            : classpathOrFile(promptTemplate);
+        this.cached = build();
+    }
+
+    private Path classpathOrFile(String path) {
+        var resource = getClass().getClassLoader().getResource(path);
+        return resource != null ? Path.of(resource.getFile()) : Path.of(path);
+    }
+
+    public String build() {
+        String snapshot = cached;
+        if (snapshot != null && !snapshot.isBlank()) {
+            return snapshot;
+        }
+        try {
+            String template = Files.readString(promptTemplate);
+            List<SkillDefinition> resident = scanner.scan(skillsRoot).stream()
+                .filter(SkillDefinition::resident).toList();
+            String block = resident.stream()
+                .map(d -> "### 技能：" + d.name() + "\n" + d.content().strip())
+                .collect(Collectors.joining("\n\n"));
+            return template.replace("{resident_skills}", block);
+        } catch (IOException e) {
+            throw new IllegalStateException("加载 system prompt 模板失败", e);
+        }
+    }
+
+    /** autoReload 场景：清缓存后下次 build 重新扫描 */
+    public void invalidateCache() {
+        cached = null;
+    }
+}
