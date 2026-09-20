@@ -63,4 +63,25 @@ class SkillManifestScannerTest {
 
         assertThat(new SkillManifestScanner().scan(tempDir)).isEmpty();
     }
+
+    @Test
+    void missingSkillsRootLogsWarnAndScansAsEmpty() {
+        Path missing = tempDir.resolve("no-such-skills");
+        ch.qos.logback.classic.Logger logger =
+            (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SkillManifestScanner.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+            new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            assertThat(new SkillManifestScanner().scan(missing)).isEmpty();
+            assertThat(appender.list)
+                .anySatisfy(e -> {
+                    assertThat(e.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                    assertThat(e.getFormattedMessage()).contains(missing.toAbsolutePath().toString());
+                });
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
 }
