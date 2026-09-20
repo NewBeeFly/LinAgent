@@ -80,4 +80,9 @@ public class FileTools {
     public ToolCallback[] toCallbacks() {
         return MethodToolCallbackProvider.builder().toolObjects(this).build().getToolCallbacks();
     }
+
+    /** 工作区根（已归一化），CsvSummaryTool 与 ShellTool2 共用同一工作区 */
+    public Path workspace() {
+        return workspaceRoot;
+    }
 }
