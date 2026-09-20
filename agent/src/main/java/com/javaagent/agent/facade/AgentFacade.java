@@ -6,6 +6,7 @@ import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.javaagent.agent.agent.AgentFactory;
 import com.javaagent.agent.agent.EventEmittingToolInterceptor;
+import com.javaagent.agent.compaction.CompactionService;
 import com.javaagent.agent.persistence.Conversation;
 import com.javaagent.agent.persistence.ConversationRepository;
 import com.javaagent.agent.persistence.Message;
@@ -13,12 +14,15 @@ import com.javaagent.agent.persistence.MessageRepository;
 import com.javaagent.agent.persistence.Turn;
 import com.javaagent.agent.persistence.TurnRepository;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Sinks;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -38,15 +42,18 @@ import java.util.concurrent.atomic.AtomicReference;
 public class AgentFacade {
 
     private final AgentFactory agentFactory;
+    private final CompactionService compactionService;
     private final ConversationRepository conversations;
     private final TurnRepository turns;
     private final MessageRepository messages;
     private final String model;
 
-    public AgentFacade(AgentFactory agentFactory, ConversationRepository conversations,
-                       TurnRepository turns, MessageRepository messages,
+    public AgentFacade(AgentFactory agentFactory, CompactionService compactionService,
+                       ConversationRepository conversations, TurnRepository turns,
+                       MessageRepository messages,
                        @Value("${spring.ai.openai.chat.options.model:step-3.7-flash}") String model) {
         this.agentFactory = agentFactory;
+        this.compactionService = compactionService;
         this.conversations = conversations;
         this.turns = turns;
         this.messages = messages;
@@ -55,6 +62,9 @@ public class AgentFacade {
 
     public Flux<AgentEvent> chat(Long conversationId, String content) {
         return Flux.defer(() -> {
+            // 压缩检查在读取会话之前（UserMessage 不进本次压缩摘要），超阈值时切换新 threadId
+            compactionService.compactIfNeeded(conversationId);
+            // 压缩后 threadId/compact_summary 已更新，必须重新读取
             Conversation conv = conversations.findById(conversationId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + conversationId));
 
@@ -86,10 +96,19 @@ public class AgentFacade {
                 return (AgentEvent) evt;
             });
 
-            // agent.stream 声明受检 GraphRunnerException，在 defer 内转 Flux.error 走统一错误路径
+            // agent.stream 声明受检 GraphRunnerException，在 defer 内转 Flux.error 走统一错误路径；
+            // 压缩过的会话（compact_summary 非空）把摘要以前置 SystemMessage 常驻输入
+            // （SAA stream 同时支持 UserMessage 与 List<Message> 重载，List 路径经源码核实
+            //  会完整进入 graph state 的 messages，末条 UserMessage 提取为 input）
             Flux<NodeOutput> nodeOutputs;
             try {
-                nodeOutputs = handle.agent().stream(new UserMessage(content), config);
+                if (conv.compactSummary() == null || conv.compactSummary().isBlank()) {
+                    nodeOutputs = handle.agent().stream(new UserMessage(content), config);
+                } else {
+                    nodeOutputs = handle.agent().stream(List.of(
+                        new SystemMessage("此前对话摘要：" + conv.compactSummary()),
+                        new UserMessage(content)), config);
+                }
             } catch (GraphRunnerException e) {
                 nodeOutputs = Flux.error(e);
             }
@@ -109,8 +128,16 @@ public class AgentFacade {
                     turns.save(turn.fail("ERROR"));
                     return Flux.just(new AgentEvent.TurnError(turn.id(), "AGENT_ERROR", e.getMessage()));
                 })
-                // main 终止（正常/异常/取消）时关闭 side sink，使 merge 得以收口
-                .doFinally(signal -> sideEvents.tryEmitComplete());
+                // main 终止（正常/异常/取消）时关闭 side sink，使 merge 得以收口；
+                // CANCEL（订阅方断连/中止）：flush 已完成片段 + turn 终态 FAILED/CANCELLED，
+                // 不再永久停留 RUNNING
+                .doFinally(signal -> {
+                    sideEvents.tryEmitComplete();
+                    if (signal == SignalType.CANCEL) {
+                        buffer.flushAll();
+                        turns.save(turns.findById(turn.id()).orElse(turn).fail("CANCELLED"));
+                    }
+                });
 
             return Flux.merge(side, main)
                 .startWith(new AgentEvent.Meta(turn.id(), conv.id(), model))
