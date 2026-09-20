@@ -86,7 +86,7 @@ class AgentFacadeTest {
     @Test
     void chatEmitsMetaDeltaTurnDoneAndPersistsCompleteMessages() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta m && m.model().equals("step-3.7-flash"))
@@ -108,7 +108,7 @@ class AgentFacadeTest {
     @Test
     void chatPersistsUserMessageWithSeqZero() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
         facade.chat(conv.id(), "问题").blockLast();
 
         assertThat(messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id()).get(0).seq()).isEqualTo(0);
@@ -117,7 +117,7 @@ class AgentFacadeTest {
     @Test
     void thinkingAndToolEventsFromSideSinkAreMergedAndPersisted() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
         // side 流两种载荷形态：String（thinking 增量，来自 ThinkingTap）与
         // 已构造好的 AgentEvent.ToolCall（来自 EventEmittingToolInterceptor）
         stubSideEvents.add("思");
@@ -147,7 +147,7 @@ class AgentFacadeTest {
     @Test
     void chatErrorEmitsTurnErrorMarksTurnFailedAndKeepsStreamComplete() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
         stubMainFlux = Flux.error(new RuntimeException("模型连接失败"));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
@@ -167,7 +167,7 @@ class AgentFacadeTest {
     @Test
     void chatCancelMarksTurnFailedAndPersistsCompletedSegments() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
         // 主流发出首个 chunk 后挂起：订阅方在收到部分内容后取消（SSE 断连场景）
         stubMainFlux = Flux.just(stubStreamingOutput("回"))
             .concatWith(Flux.never());
@@ -189,14 +189,40 @@ class AgentFacadeTest {
         assertThat(saved.get(1).content()).isEqualTo("回");
     }
 
+    /**
+     * fix round 1：TURN 收尾（TurnDone 已 finalize、turn COMPLETED）之后才到达的 CANCEL
+     * 不得把 COMPLETED 覆写为 FAILED——once-guard 保证终态只落一次。
+     */
+    @Test
+    void chatCancelAfterTurnDoneKeepsCompletedStatus() {
+        Conversation conv = conversations.save(
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+
+        StepVerifier.create(facade.chat(conv.id(), "你好"))
+            .expectNextMatches(e -> e instanceof AgentEvent.Meta)
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta d && d.content().equals("回"))
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta d && d.content().equals("答"))
+            .expectNextMatches(e -> e instanceof AgentEvent.TurnDone)
+            .thenCancel()
+            .verify();
+
+        Optional<Turn> turn = turns.findTopByConversationIdOrderBySeqDesc(conv.id());
+        assertThat(turn).isPresent();
+        assertThat(turn.get().status()).isEqualTo("COMPLETED");
+        assertThat(turn.get().finishReason()).isEqualTo("STOP");
+
+        List<Message> saved = messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id());
+        assertThat(saved).extracting(Message::msgType).containsExactly("USER", "TEXT");
+    }
+
     @Test
     void chatRunsCompactionAndSwitchesToNewThreadWithSummaryPrefix() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
         // 模拟 CompactionService 的副作用：更新 conversation 的 threadId + compact_summary
         when(compaction.compactIfNeeded(conv.id())).thenAnswer(inv -> {
             conversations.save(new Conversation(conv.id(), conv.title(), "conv-1-v1",
-                "压缩后的历史摘要", conv.createdAt(), Instant.now()));
+                "压缩后的历史摘要", 2, conv.createdAt(), Instant.now()));
             return Optional.of("conv-1-v1");
         });
 
@@ -228,7 +254,7 @@ class AgentFacadeTest {
     void chatWithExistingCompactSummaryAlwaysPrependsSummarySystemMessage() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
         // 已压缩会话（compact_summary 已存在、本轮未再触发压缩）：摘要常驻输入
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1-v1", "既有摘要", Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1-v1", "既有摘要", 2, Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "继续"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta)
@@ -248,7 +274,7 @@ class AgentFacadeTest {
     @Test
     void chatWithoutSummarySendsPlainUserMessage() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
         facade.chat(conv.id(), "你好").blockLast();
 
         ArgumentCaptor<UserMessage> inputCaptor = ArgumentCaptor.forClass(UserMessage.class);
@@ -269,7 +295,8 @@ class AgentFacadeTest {
         @SuppressWarnings("unchecked")
         @Override public <S extends Conversation> S save(S e) {
             Long id = e.id() == null ? nextId++ : e.id();
-            Conversation saved = new Conversation(id, e.title(), e.threadId(), e.compactSummary(), e.createdAt(), e.updatedAt());
+            Conversation saved = new Conversation(id, e.title(), e.threadId(), e.compactSummary(),
+                e.compactedTurnSeq() == null ? 0 : e.compactedTurnSeq(), e.createdAt(), e.updatedAt());
             data.removeIf(c -> c.id().equals(id));
             data.add(saved);
             return (S) saved;
@@ -295,7 +322,7 @@ class AgentFacadeTest {
         @Override public void touch(Long id) {
             findById(id).ifPresent(c ->
                 data.set(data.indexOf(c), new Conversation(c.id(), c.title(), c.threadId(),
-                    c.compactSummary(), c.createdAt(), Instant.now())));
+                    c.compactSummary(), c.compactedTurnSeq(), c.createdAt(), Instant.now())));
         }
     }
 

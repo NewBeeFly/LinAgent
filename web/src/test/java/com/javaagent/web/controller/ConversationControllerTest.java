@@ -35,7 +35,7 @@ class ConversationControllerTest {
     @Test
     void createReturnsConversation() throws Exception {
         when(conversations.save(any())).thenReturn(
-            new com.javaagent.agent.persistence.Conversation(1L, "新会话", "conv-1", null,
+            new com.javaagent.agent.persistence.Conversation(1L, "新会话", "conv-1", null, 0,
                 java.time.Instant.now(), java.time.Instant.now()));
 
         mockMvc.perform(post("/api/conversations")
@@ -49,7 +49,7 @@ class ConversationControllerTest {
     @Test
     void listReturnsConversationsWithTurnCount() throws Exception {
         when(conversations.findAllByOrderByUpdatedAtDesc()).thenReturn(List.of(
-            new com.javaagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null,
+            new com.javaagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
                 java.time.Instant.now(), java.time.Instant.now())));
         when(turns.countByConversationId(1L)).thenReturn(3);
 
@@ -62,7 +62,7 @@ class ConversationControllerTest {
     @Test
     void turnsReplayReturnsNestedMessages() throws Exception {
         when(conversations.findById(1L)).thenReturn(java.util.Optional.of(
-            new com.javaagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null,
+            new com.javaagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
                 java.time.Instant.now(), java.time.Instant.now())));
         when(turns.findByConversationIdOrderBySeqAsc(1L)).thenReturn(List.of(
             new com.javaagent.agent.persistence.Turn(10L, 1L, 1, "COMPLETED", "STOP", null,
@@ -86,7 +86,7 @@ class ConversationControllerTest {
     @Test
     void deleteCascadesCheckpointCleanupThenRemovesConversation() throws Exception {
         when(conversations.findById(1L)).thenReturn(java.util.Optional.of(
-            new com.javaagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null,
+            new com.javaagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
                 java.time.Instant.now(), java.time.Instant.now())));
 
         mockMvc.perform(delete("/api/conversations/1"))

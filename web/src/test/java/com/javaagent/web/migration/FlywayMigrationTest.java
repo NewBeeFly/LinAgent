@@ -51,4 +51,15 @@ class FlywayMigrationTest {
             String.class);
         assertThat(types).contains("USER", "THINKING", "TEXT", "TOOL_CALL", "TOOL_RESULT", "ERROR", "SUMMARY");
     }
+
+    @Test
+    void compactionAnchorColumnAddedByV3() {
+        // V3__compaction_anchor.sql：压缩锚点（已摘要到哪轮），估算基准与给模型的记忆同量纲
+        String column = jdbcTemplate.queryForObject("""
+            select data_type || ':' || is_nullable || ':' || column_default
+            from information_schema.columns
+            where table_name = 'conversation' and column_name = 'compacted_turn_seq'
+            """, String.class);
+        assertThat(column).isEqualTo("integer:NO:0");
+    }
 }
