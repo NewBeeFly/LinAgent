@@ -30,8 +30,15 @@ Vite 启动输出为准（5173 被占用时自动切换下一个可用端口）�
 ```bash
 mvn test -DexcludedGroups=manual          # 单元 + Testcontainers（含 E2E）
 mvn -pl agent test -Dgroups=manual        # StepFun 流式探针（需真实 key）
+mvn -pl web test -Dtest=SkillsSmokeTest -Dgroups=manual   # 技能链路冒烟（需本地 PG + 真实 key）
 cd frontend && npx vitest run
 ```
 
-`manual` 分组是打真实 StepFun API 的流式探针（`StepFunStreamingProbeTest`），
-默认排除、单独显式触发，避免单测依赖外部 LLM 服务。
+`manual` 分组打真实 StepFun API：`StepFunStreamingProbeTest`（流式探针）与
+`SkillsSmokeTest`（技能链路冒烟），默认排除、单独显式触发，避免单测依赖外部 LLM 服务。
+
+`SkillsSmokeTest` 已于 2026-09-20 真实跑通（step-3.7-flash，第 1 次尝试通过）：
+`read_skill` 加载 csv-analysis → `csv_summary` 真实执行（2 行/2 列/表头 name,score）→
+Markdown 统计结论 → `turn_done`（usage 落库 `{"totalTokens":2587,...}`）。证据摘录见
+测试类 `CONCLUSION` 常量与 `.superpowers/sdd/2026-09-20-react-agent/final-fix-report.md`。
+
