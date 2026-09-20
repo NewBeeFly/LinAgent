@@ -86,4 +86,28 @@ class ChatControllerSseTest {
             .exchange()
             .expectStatus().isBadRequest();
     }
+
+    @Test
+    void turnErrorWithNullMessageDoesNotBreakStream() {
+        // AgentFacade 的 TurnError.message 来自 e.getMessage()，NPE 类异常 message 为 null；
+        // payload 构造须 null 容错：该字段缺省，而非 NPE 打穿 Flux 中断流。
+        when(agentFacade.chat(eq(2L), eq("嗨"))).thenReturn(Flux.just(
+            new AgentEvent.Meta(11L, 2L, "step-3.7-flash"),
+            new AgentEvent.TurnError(11L, "AGENT_ERROR", null)));
+
+        webTestClient.post().uri("/api/conversations/2/chat")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue(new com.javaagent.web.dto.ChatRequest("嗨"))
+            .exchange()
+            .expectStatus().isOk()
+            .expectHeader().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM)
+            .expectBody(String.class).value(body -> {
+                org.assertj.core.api.Assertions.assertThat(body)
+                    .contains("event:error")
+                    .contains("\"code\":\"AGENT_ERROR\"")
+                    .contains("\"turnId\":11")
+                    .contains("\"seq\":2")
+                    .doesNotContain("\"message\"");
+            });
+    }
 }

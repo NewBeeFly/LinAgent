@@ -6,6 +6,7 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -44,22 +45,59 @@ public class SseEventMapper {
         };
     }
 
+    /**
+     * null 容错构造：任一字段为 null（如 NPE 类异常的 getMessage() 为 null）时该字段缺省，
+     * 而非 Map.of 的 NPE 打穿 Flux 中断流。seq 恒存在。
+     */
     private Map<String, Object> payload(AgentEvent evt, long seq) {
-        return switch (evt) {
-            case AgentEvent.Meta m -> Map.of("turnId", m.turnId(), "conversationId", m.conversationId(),
-                "model", m.model(), "seq", seq);
-            case AgentEvent.ThinkingDelta t -> Map.of("turnId", t.turnId(), "content", t.content(), "seq", seq);
-            case AgentEvent.MessageDelta m -> Map.of("turnId", m.turnId(), "content", m.content(), "seq", seq);
-            case AgentEvent.ToolCall t -> Map.of("turnId", t.turnId(), "callId", t.callId(),
-                "toolName", t.toolName(), "arguments", t.arguments(), "seq", seq);
-            case AgentEvent.ToolResult t -> Map.of("turnId", t.turnId(), "callId", t.callId(),
-                "toolName", t.toolName(), "result", t.result(),
-                "durationMs", t.durationMs(), "success", t.success(), "seq", seq);
-            case AgentEvent.TurnDone t -> Map.of("turnId", t.turnId(), "finishReason", t.finishReason(),
-                "usage", t.usage(), "seq", seq);
-            case AgentEvent.TurnError e -> Map.of("turnId", e.turnId(), "code", e.code(),
-                "message", e.message(), "seq", seq);
-        };
+        Map<String, Object> payload = new LinkedHashMap<>();
+        switch (evt) {
+            case AgentEvent.Meta m -> {
+                putIfNotNull(payload, "turnId", m.turnId());
+                putIfNotNull(payload, "conversationId", m.conversationId());
+                putIfNotNull(payload, "model", m.model());
+            }
+            case AgentEvent.ThinkingDelta t -> {
+                putIfNotNull(payload, "turnId", t.turnId());
+                putIfNotNull(payload, "content", t.content());
+            }
+            case AgentEvent.MessageDelta m -> {
+                putIfNotNull(payload, "turnId", m.turnId());
+                putIfNotNull(payload, "content", m.content());
+            }
+            case AgentEvent.ToolCall t -> {
+                putIfNotNull(payload, "turnId", t.turnId());
+                putIfNotNull(payload, "callId", t.callId());
+                putIfNotNull(payload, "toolName", t.toolName());
+                putIfNotNull(payload, "arguments", t.arguments());
+            }
+            case AgentEvent.ToolResult t -> {
+                putIfNotNull(payload, "turnId", t.turnId());
+                putIfNotNull(payload, "callId", t.callId());
+                putIfNotNull(payload, "toolName", t.toolName());
+                putIfNotNull(payload, "result", t.result());
+                putIfNotNull(payload, "durationMs", t.durationMs());
+                putIfNotNull(payload, "success", t.success());
+            }
+            case AgentEvent.TurnDone t -> {
+                putIfNotNull(payload, "turnId", t.turnId());
+                putIfNotNull(payload, "finishReason", t.finishReason());
+                putIfNotNull(payload, "usage", t.usage());
+            }
+            case AgentEvent.TurnError e -> {
+                putIfNotNull(payload, "turnId", e.turnId());
+                putIfNotNull(payload, "code", e.code());
+                putIfNotNull(payload, "message", e.message());
+            }
+        }
+        payload.put("seq", seq);
+        return payload;
+    }
+
+    private static void putIfNotNull(Map<String, Object> payload, String key, Object value) {
+        if (value != null) {
+            payload.put(key, value);
+        }
     }
 
     private String toJson(Object value) {
