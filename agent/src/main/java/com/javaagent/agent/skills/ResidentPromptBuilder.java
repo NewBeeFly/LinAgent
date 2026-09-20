@@ -49,7 +49,9 @@ public class ResidentPromptBuilder {
             String block = resident.stream()
                 .map(d -> "### 技能：" + d.name() + "\n" + d.content().strip())
                 .collect(Collectors.joining("\n\n"));
-            return template.replace("{resident_skills}", block);
+            String result = template.replace("{resident_skills}", block);
+            this.cached = result;
+            return result;
         } catch (IOException e) {
             throw new IllegalStateException("加载 system prompt 模板失败", e);
         }

@@ -58,6 +58,31 @@ class ResidentPromptBuilderTest {
             .doesNotContain("# 常驻正文");
     }
 
+    @Test
+    void buildRecachesAfterInvalidationSoSubsequentBuildsSkipRescan() throws Exception {
+        Path skillsRoot = writeSkills();
+        Path template = tempDir.resolve("system-prompt.md");
+        Files.writeString(template, "{resident_skills}");
+
+        ResidentPromptBuilder builder = new ResidentPromptBuilder(
+            new SkillManifestScanner(), skillsRoot.toString(), template.toString());
+
+        builder.invalidateCache();
+        String rebuilt = builder.build();
+        assertThat(rebuilt).contains("# 常驻正文");
+
+        // invalidate 后首次 build 已回写缓存：再次变更文件不应被感知（不重扫）
+        Files.writeString(skillsRoot.resolve("resident-skill").resolve("SKILL.md"), """
+            ---
+            name: resident-skill
+            description: 常驻技能
+            resident: true
+            ---
+            # 未再次失效时的新正文
+            """);
+        assertThat(builder.build()).isSameAs(rebuilt);
+    }
+
     private Path writeSkills() throws Exception {
         Path skillsRoot = tempDir.resolve("skills");
         Path resident = skillsRoot.resolve("resident-skill");

@@ -1,5 +1,7 @@
 package com.javaagent.agent.skills;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -18,6 +20,8 @@ import java.util.regex.Pattern;
 @Component
 public class SkillManifestScanner {
 
+    private static final Logger log = LoggerFactory.getLogger(SkillManifestScanner.class);
+
     private static final Pattern FRONTMATTER =
         Pattern.compile("\\A---\\R(.*?)\\R---\\R?(.*)\\Z", Pattern.DOTALL);
     private static final Pattern NAME = Pattern.compile("^name:\\s*(.+)$", Pattern.MULTILINE);
@@ -26,6 +30,8 @@ public class SkillManifestScanner {
 
     public List<SkillDefinition> scan(Path skillsRoot) {
         if (!Files.isDirectory(skillsRoot)) {
+            // 容错为空技能集，但保留可观测信号：默认路径解析不到（配置错误）时常驻注入会静默失效
+            log.warn("技能目录不存在或不是目录，按空技能集处理: {}", skillsRoot.toAbsolutePath());
             return List.of();
         }
         try (var stream = Files.list(skillsRoot)) {
