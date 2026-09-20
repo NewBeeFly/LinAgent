@@ -4,7 +4,8 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/javaagent
     username: jiege
-    password: jiege666
+    # 密码走环境变量占位，缺省值仅本机开发库（不入库真实凭据）
+    password: ${DB_PASSWORD:jiege666}
   ai:
     openai:
       api-key: ${STEPFUN_API_KEY:}

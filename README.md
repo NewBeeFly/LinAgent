@@ -42,3 +42,10 @@ cd frontend && npx vitest run
 Markdown 统计结论 → `turn_done`（usage 落库 `{"totalTokens":2587,...}`）。证据摘录见
 测试类 `CONCLUSION` 常量与 `.superpowers/sdd/2026-09-20-react-agent/final-fix-report.md`。
 
+## 安全须知
+
+- **shell 工具无沙箱**：agent 的 `ShellTool2` 以当前用户权限在工作区内执行任意命令，
+  模型被诱导时可触达用户权限范围内的任意系统操作。仅在本机/可信环境使用，不要把
+  服务直接暴露到公网。
+- **凭据不入库**：PG 密码建议走环境变量（`DB_PASSWORD`，测试配置已用占位符缺省本机值），
+  StepFun key 走 `application-local.yml`（已 gitignore）或 `STEPFUN_API_KEY`。
