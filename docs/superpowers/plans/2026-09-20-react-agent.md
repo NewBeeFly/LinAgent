@@ -380,6 +380,7 @@ class FlywayMigrationTest {
         assertThat(types).contains("USER", "THINKING", "TEXT", "TOOL_CALL", "TOOL_RESULT", "ERROR", "SUMMARY");
     }
 }
+```
 
 - [ ] **Step 3: 运行测试确认失败**
 
