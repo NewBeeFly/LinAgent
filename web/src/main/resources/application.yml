@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: java-agent
+  profiles:
+    active: local
+  ai:
+    openai:
+      api-key: ${STEPFUN_API_KEY:}
+      base-url: https://api.stepfun.com/step_plan
+      chat:
+        options:
+          model: step-3.7-flash
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+agent:
+  skills-root: ./skills
+  workspace-root: ./workspace
+  compaction:
+    threshold-tokens: 24000
