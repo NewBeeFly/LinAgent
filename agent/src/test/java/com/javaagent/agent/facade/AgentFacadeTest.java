@@ -44,8 +44,11 @@ class AgentFacadeTest {
     private final List<Object> stubSideEvents = new ArrayList<>();
     /** 桩 agent 主流：null = 默认两个文本 chunk；否则按此 Flux 输出 */
     private Flux<com.alibaba.cloud.ai.graph.NodeOutput> stubMainFlux;
+    /** 桩 usage 捕获值（模拟 ThinkingTapChatModel 在流上捕获 Spring AI Usage）；null = 不捕获 */
+    private Object stubUsage;
     private Sinks.Many<Object> capturedSink;
     private ReactAgent capturedAgent;
+    private AtomicReference<Object> capturedUsageRef;
 
     @BeforeEach
     void setUp() {
@@ -56,10 +59,13 @@ class AgentFacadeTest {
         when(compaction.compactIfNeeded(any())).thenReturn(Optional.empty());
         stubSideEvents.clear();
         stubMainFlux = null;
+        // 默认喂一份真实捕获形态的 usage（终审 Important 2：收尾落 turn.usage）
+        stubUsage = usage(10, 20, 30);
 
         AgentFactory factory = mock(AgentFactory.class);
         when(factory.create(any(), any(), any())).thenAnswer(inv -> {
             capturedSink = inv.getArgument(0);
+            capturedUsageRef = inv.getArgument(1);
             ReactAgent agent = mock(ReactAgent.class);
             when(agent.stream(any(UserMessage.class), any(RunnableConfig.class)))
                 .thenAnswer(streamInv -> stubAgentMainFlux());
@@ -73,10 +79,23 @@ class AgentFacadeTest {
         facade = new AgentFacade(factory, compaction, conversations, turns, messages, "step-3.7-flash");
     }
 
+    /** Spring AI Usage 桩（ThinkingTapChatModel 捕获的真实载荷形态；getter 返回 Integer） */
+    private static org.springframework.ai.chat.metadata.Usage usage(int prompt, int completion, int total) {
+        org.springframework.ai.chat.metadata.Usage u = mock(org.springframework.ai.chat.metadata.Usage.class);
+        when(u.getPromptTokens()).thenReturn(prompt);
+        when(u.getCompletionTokens()).thenReturn(completion);
+        when(u.getTotalTokens()).thenReturn(total);
+        return u;
+    }
+
     /** 桩 agent 主流统一行为：side 预置事件 + 主流输出 */
     private Flux<com.alibaba.cloud.ai.graph.NodeOutput> stubAgentMainFlux() {
         // 订阅前预置 side 事件（真实链路中由 ThinkingTap/拦截器在主流执行期间发射）
         stubSideEvents.forEach(evt -> capturedSink.tryEmitNext(evt));
+        // 模拟 ThinkingTapChatModel：主流响应到达时把 usage 写入捕获器
+        if (stubUsage != null) {
+            capturedUsageRef.set(stubUsage);
+        }
         if (stubMainFlux != null) {
             return stubMainFlux;
         }
@@ -99,10 +118,37 @@ class AgentFacadeTest {
         Optional<Turn> turn = turns.findTopByConversationIdOrderBySeqDesc(conv.id());
         assertThat(turn).isPresent();
         assertThat(turn.get().status()).isEqualTo("COMPLETED");
+        // 终审 Important 2：收尾把 ThinkingTap 捕获的 usage 序列化落 turn.usage（JSONB）
+        assertThat(turn.get().usage())
+            .contains("\"promptTokens\":10")
+            .contains("\"completionTokens\":20")
+            .contains("\"totalTokens\":30");
 
         List<Message> saved = messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id());
         assertThat(saved).extracting(Message::msgType).containsExactly("USER", "TEXT");
         assertThat(saved.get(1).content()).isEqualTo("回答");
+    }
+
+    /** 终审 Important 2 专项：usage 捕获缺失（ThinkingTap 未捕获到）时归零落库，不抛异常 */
+    @Test
+    void chatWithoutCapturedUsageFallsBackToZeroUsageJson() {
+        stubUsage = null;
+        Conversation conv = conversations.save(
+            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+
+        StepVerifier.create(facade.chat(conv.id(), "你好"))
+            .expectNextMatches(e -> e instanceof AgentEvent.Meta)
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta)
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta)
+            .expectNextMatches(e -> e instanceof AgentEvent.TurnDone
+                && ((AgentEvent.TurnDone) e).usage().totalTokens() == 0)
+            .verifyComplete();
+
+        Optional<Turn> turn = turns.findTopByConversationIdOrderBySeqDesc(conv.id());
+        assertThat(turn).isPresent();
+        assertThat(turn.get().status()).isEqualTo("COMPLETED");
+        assertThat(turn.get().usage()).isEqualTo(
+            "{\"promptTokens\":0,\"completionTokens\":0,\"totalTokens\":0}");
     }
 
     @Test
