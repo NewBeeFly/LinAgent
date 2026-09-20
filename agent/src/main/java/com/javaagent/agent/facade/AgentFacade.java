@@ -23,6 +23,7 @@ import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Sinks;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -73,6 +74,10 @@ public class AgentFacade {
             messages.save(Message.user(turn.id(), 0, content));
 
             SegmentBuffer buffer = new SegmentBuffer(turn.id(), messages);
+            // 终态收口 once-guard（fix round 1）：flushAll→终态落库在 完成/异常/取消 三条
+            // 路径中只执行一次——CANCEL 与末条 TurnDone 发射竞态时不会把 COMPLETED 覆写为
+            // FAILED；flushAll 的跨线程原子性由 SegmentBuffer 自身 synchronized 保证
+            AtomicBoolean finalized = new AtomicBoolean(false);
             // 三路发射方（ThinkingTap / 工具拦截器，SAA 并行 tool call 时多线程）共享同一
             // unicast sink：经 SerializedEmitSink 串行收口，避免 FAIL_NON_SERIALIZED 静默丢事件
             Sinks.Many<Object> sideEvents =
@@ -116,26 +121,33 @@ public class AgentFacade {
             Flux<AgentEvent> main = nodeOutputs
                 .concatMap(nodeOutput -> mapNodeOutput(nodeOutput, turn.id(), buffer))
                 .concatWith(Flux.defer(() -> {
-                    buffer.flushAll();
+                    if (finalized.compareAndSet(false, true)) {
+                        buffer.flushAll();
+                        turns.save(turns.findById(turn.id()).orElse(turn).complete("STOP", null));
+                        conversations.touch(conv.id());
+                    }
                     AgentEvent.Usage usage = toUsage(usageCapture.get());
-                    turns.save(turns.findById(turn.id()).orElse(turn).complete("STOP", null));
-                    conversations.touch(conv.id());
                     return Flux.just(new AgentEvent.TurnDone(turn.id(), "STOP", usage));
                 }))
                 .onErrorResume(e -> {
-                    buffer.flushAll();
-                    messages.save(Message.error(turn.id(), buffer.currentSeq(), e.toString()));
-                    turns.save(turn.fail("ERROR"));
+                    if (finalized.compareAndSet(false, true)) {
+                        buffer.flushAll();
+                        messages.save(Message.error(turn.id(), buffer.currentSeq(), e.toString()));
+                        turns.save(turn.fail("ERROR"));
+                    }
                     return Flux.just(new AgentEvent.TurnError(turn.id(), "AGENT_ERROR", e.getMessage()));
                 })
                 // main 终止（正常/异常/取消）时关闭 side sink，使 merge 得以收口；
                 // CANCEL（订阅方断连/中止）：flush 已完成片段 + turn 终态 FAILED/CANCELLED，
-                // 不再永久停留 RUNNING
+                // 不再永久停留 RUNNING。once-guard 抢占失败 = 收尾路径已落终态
+                // （COMPLETED/ERROR），晚到的 CANCEL 不改写；RUNNING 复核兜底
                 .doFinally(signal -> {
                     sideEvents.tryEmitComplete();
-                    if (signal == SignalType.CANCEL) {
+                    if (signal == SignalType.CANCEL && finalized.compareAndSet(false, true)) {
                         buffer.flushAll();
-                        turns.save(turns.findById(turn.id()).orElse(turn).fail("CANCELLED"));
+                        turns.findById(turn.id())
+                            .filter(t -> "RUNNING".equals(t.status()))
+                            .ifPresent(t -> turns.save(t.fail("CANCELLED")));
                     }
                 });
 

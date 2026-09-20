@@ -36,8 +36,8 @@ public class ConversationController {
     public ConversationResponse create(@RequestBody(required = false) CreateConversationRequest request) {
         String title = (request == null || request.title() == null || request.title().isBlank())
             ? "新会话" : request.title();
-        Conversation saved = conversations.save(new Conversation(null, title,
-            "conv-" + System.nanoTime(), null, Instant.now(), Instant.now()));
+        Conversation saved = conversations.save(
+            Conversation.create(title, "conv-" + System.nanoTime(), Instant.now()));
         return new ConversationResponse(saved.id(), saved.title(), 0, saved.updatedAt().toString());
     }
 
