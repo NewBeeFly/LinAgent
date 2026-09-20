@@ -29,6 +29,8 @@ export interface ChatTurn {
   text: string
   tools: ToolEvent[]
   status: 'streaming' | 'done' | 'error'
+  /** 错误提示行（网络失败 / SSE error 事件 / 历史回放 ERROR 消息），渲染为红色提示 */
+  errorText?: string
 }
 
 export interface ToolEvent {
