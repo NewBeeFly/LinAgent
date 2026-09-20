@@ -3,6 +3,10 @@ spring:
     name: java-agent
   profiles:
     active: local
+  datasource:
+    # stringtype=unspecified：允许实体 String 字段直写 JSONB 列（turn.usage / message.arguments）。
+    # host/库名可用环境变量覆盖；profile 配置（如 application-local.yml）可整体覆盖 url（需自带该参数）。
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:javaagent}?stringtype=unspecified
   ai:
     openai:
       api-key: ${STEPFUN_API_KEY:}

@@ -106,6 +106,10 @@ class RepositoryTest {
 
         List<Turn> ordered = turns.findByConversationIdOrderBySeqAsc(conv.id());
         assertThat(ordered).extracting(Turn::seq).containsExactly(1, 2);
+        // JSONB usage 列读回 String 的值级闭环（经 JdbcConverterConfig 的 PGobject -> String 转换）
+        Turn completed = ordered.get(0);
+        assertThat(completed.usage()).contains("total_tokens");
+        assertThat(completed.finishReason()).isEqualTo("stop");
     }
 
     @Test
