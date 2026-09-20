@@ -15,7 +15,10 @@ import com.javaagent.agent.persistence.TurnRepository;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -34,9 +37,16 @@ class ConversationControllerTest {
 
     @Test
     void createReturnsConversation() throws Exception {
-        when(conversations.save(any())).thenReturn(
-            new com.javaagent.agent.persistence.Conversation(1L, "新会话", "conv-1", null, 0,
-                java.time.Instant.now(), java.time.Instant.now()));
+        // 两段式落库语义：save 幂等桩——id 为 null 时分配 id（第一次 INSERT），
+        // 已有 id 时原样返回（第二次 UPDATE）
+        when(conversations.save(any())).thenAnswer(inv -> {
+            com.javaagent.agent.persistence.Conversation e = inv.getArgument(0);
+            if (e.id() == null) {
+                return new com.javaagent.agent.persistence.Conversation(1L, e.title(), e.threadId(),
+                    e.compactSummary(), e.compactedTurnSeq(), e.createdAt(), e.updatedAt());
+            }
+            return e;
+        });
 
         mockMvc.perform(post("/api/conversations")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -44,6 +54,34 @@ class ConversationControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.id").value(1))
             .andExpect(jsonPath("$.title").value("新会话"));
+    }
+
+    /**
+     * 终审 Important 1：create 两段式落库——先 save 拿 id，再落 threadId = "conv-{id}"。
+     * nanoTime 形态的 threadId 与 CheckpointCleaner 的删除模式（conv-{id} / conv-{id}-v%）
+     * 匹配不上，导致未压缩会话的 checkpoint 永久孤儿。
+     */
+    @Test
+    void createPersistsThreadIdEqualToConvIdPrefix() throws Exception {
+        when(conversations.save(any())).thenAnswer(inv -> {
+            com.javaagent.agent.persistence.Conversation e = inv.getArgument(0);
+            if (e.id() == null) {
+                return new com.javaagent.agent.persistence.Conversation(1L, e.title(), e.threadId(),
+                    e.compactSummary(), e.compactedTurnSeq(), e.createdAt(), e.updatedAt());
+            }
+            return e;
+        });
+
+        mockMvc.perform(post("/api/conversations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isOk());
+
+        org.mockito.ArgumentCaptor<com.javaagent.agent.persistence.Conversation> captor =
+            org.mockito.ArgumentCaptor.forClass(com.javaagent.agent.persistence.Conversation.class);
+        verify(conversations, times(2)).save(captor.capture());
+        // 第二段：threadId 与会话 id 对齐（spec §3 threadId=conversationId 语义）
+        assertThat(captor.getAllValues().get(1).threadId()).isEqualTo("conv-1");
     }
 
     @Test

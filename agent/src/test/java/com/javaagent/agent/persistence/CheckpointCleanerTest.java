@@ -14,6 +14,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import javax.sql.DataSource;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -26,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @DataJdbcTest(properties = {
     "spring.sql.init.mode=always",
-    "spring.sql.init.schema-locations=classpath:db/migration/V1__init.sql"
+    "spring.sql.init.schema-locations=classpath:db/migration/V1__init.sql,classpath:db/migration/V3__compaction_anchor.sql"
 })
 @Import({JdbcConverterConfig.class, CheckpointCleaner.class})
 @Testcontainers
@@ -39,6 +40,9 @@ class CheckpointCleanerTest {
 
     @Autowired
     CheckpointCleaner cleaner;
+
+    @Autowired
+    ConversationRepository conversations;
 
     @Autowired
     JdbcTemplate jdbcTemplate;
@@ -77,6 +81,34 @@ class CheckpointCleanerTest {
     void deleteIsIdempotentAndSafeForUnknownConversation() {
         cleaner.deleteByConversationId(404L);
         cleaner.deleteByConversationId(404L);
+    }
+
+    /**
+     * 终审 Important 1 生产形态用例：threadId 由 create 的两段式落库生成
+     * （先 save 拿 id，再 update 为 conv-{id}）后，checkpoint 线程名与 cleaner 的
+     * 删除模式能真实对上——验证的是"两段式落库 → saver 写入 → cleaner 级联"全链路
+     * 的生产形态，而非测试手工拼一个恰好匹配的 threadId。
+     */
+    @Test
+    void deleteRemovesCheckpointsOfProductionShapedThreadId() throws Exception {
+        PostgresSaver saver = PostgresSaver.builder().datasource(dataSource).build();
+
+        // 两段式落库（与 ConversationController.create 同语义）
+        Conversation first = conversations.save(
+            Conversation.create("生产形态", "pending-" + System.nanoTime(), Instant.now()));
+        Conversation conv = conversations.save(new Conversation(first.id(), first.title(),
+            "conv-" + first.id(), first.compactSummary(), first.compactedTurnSeq(),
+            first.createdAt(), first.updatedAt()));
+        assertThat(conv.threadId()).isEqualTo("conv-" + conv.id());
+
+        // agent 以该 threadId 落 checkpoint（AgentFacade → RunnableConfig）
+        saveCheckpoint(saver, conv.threadId());
+        assertThat(checkpointCount(conv.threadId())).isEqualTo(1);
+
+        cleaner.deleteByConversationId(conv.id());
+
+        assertThat(checkpointCount(conv.threadId())).isZero();
+        assertThat(threadCount(conv.threadId())).isZero();
     }
 
     private void saveCheckpoint(PostgresSaver saver, String threadId) throws Exception {

@@ -121,12 +121,13 @@ public class AgentFacade {
             Flux<AgentEvent> main = nodeOutputs
                 .concatMap(nodeOutput -> mapNodeOutput(nodeOutput, turn.id(), buffer))
                 .concatWith(Flux.defer(() -> {
+                    // usage 在 complete 之前取值：ThinkingTap 捕获的最后一包 metadata
+                    AgentEvent.Usage usage = toUsage(usageCapture.get());
                     if (finalized.compareAndSet(false, true)) {
                         buffer.flushAll();
-                        turns.save(turns.findById(turn.id()).orElse(turn).complete("STOP", null));
+                        turns.save(turns.findById(turn.id()).orElse(turn).complete("STOP", usageJson(usage)));
                         conversations.touch(conv.id());
                     }
-                    AgentEvent.Usage usage = toUsage(usageCapture.get());
                     return Flux.just(new AgentEvent.TurnDone(turn.id(), "STOP", usage));
                 }))
                 .onErrorResume(e -> {
@@ -185,5 +186,15 @@ public class AgentFacade {
                 u.getTotalTokens() == null ? 0 : u.getTotalTokens());
         }
         return new AgentEvent.Usage(0, 0, 0);
+    }
+
+    /**
+     * usage 落库形态（turn.usage JSONB 列）：与 AgentEvent.Usage 的 record 字段名
+     * 一致（promptTokens/completionTokens/totalTokens），消费方（回放接口/账单统计）
+     * 可直接反序列化。
+     */
+    private String usageJson(AgentEvent.Usage usage) {
+        return "{\"promptTokens\":%d,\"completionTokens\":%d,\"totalTokens\":%d}"
+            .formatted(usage.promptTokens(), usage.completionTokens(), usage.totalTokens());
     }
 }

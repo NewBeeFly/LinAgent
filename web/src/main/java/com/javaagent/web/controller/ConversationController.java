@@ -36,8 +36,16 @@ public class ConversationController {
     public ConversationResponse create(@RequestBody(required = false) CreateConversationRequest request) {
         String title = (request == null || request.title() == null || request.title().isBlank())
             ? "新会话" : request.title();
-        Conversation saved = conversations.save(
-            Conversation.create(title, "conv-" + System.nanoTime(), Instant.now()));
+        // 两段式落库（终审 Important 1）：先 save 拿 id，再落 threadId = "conv-{id}"
+        // （spec §3 threadId=conversationId）。id 由 PG 序列生成，落库前无从预知；
+        // threadId 必须与 CheckpointCleaner 的删除模式（conv-{id} / conv-{id}-v%）对齐，
+        // 否则未压缩会话（threadId 从未换代）的 checkpoint 在会话删除后成为永久孤儿。
+        // 临时值只需绕开 NOT NULL 且不与正式模式冲突，落库即被第二段覆盖。
+        Conversation first = conversations.save(
+            Conversation.create(title, "pending-" + System.nanoTime(), Instant.now()));
+        Conversation saved = conversations.save(new Conversation(first.id(), first.title(),
+            "conv-" + first.id(), first.compactSummary(), first.compactedTurnSeq(),
+            first.createdAt(), first.updatedAt()));
         return new ConversationResponse(saved.id(), saved.title(), 0, saved.updatedAt().toString());
     }
 
