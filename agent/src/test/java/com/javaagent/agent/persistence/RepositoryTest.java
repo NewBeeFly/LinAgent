@@ -1,0 +1,127 @@
+package com.javaagent.agent.persistence;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.data.jdbc.DataJdbcTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.time.Instant;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DataJdbcTest(properties = {
+    "spring.sql.init.mode=always",
+    "spring.sql.init.schema-locations=classpath:db/migration/V1__init.sql"
+})
+@Import(JdbcConverterConfig.class) // JSONB 列读取转换（PGobject -> String）
+@Testcontainers
+class RepositoryTest {
+
+    @Container
+    @ServiceConnection
+    // stringtype=unspecified：允许以 String 直写 JSONB 列（turn.usage / message.arguments）
+    static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine")
+        .withUrlParam("stringtype", "unspecified");
+
+    @Autowired
+    ConversationRepository conversations;
+    @Autowired
+    TurnRepository turns;
+    @Autowired
+    MessageRepository messages;
+
+    @Test
+    void saveAndQueryConversationTurnMessage() {
+        Conversation conv = conversations.save(
+            new Conversation(null, "测试会话", "conv-1", null, Instant.now(), Instant.now()));
+
+        Turn turn = turns.save(new Turn(null, conv.id(), 1, "RUNNING",
+            null, null, Instant.now(), null));
+
+        messages.save(new Message(null, turn.id(), 0, "USER", "你好", null, null, null, null, null, null, Instant.now()));
+        messages.save(new Message(null, turn.id(), 1, "THINKING", "思考内容", null, null, null, null, null, null, Instant.now()));
+        messages.save(new Message(null, turn.id(), 2, "TOOL_CALL", null, "call-1", "list_dir",
+            "{\"path\":\".\"}", null, null, null, Instant.now()));
+        messages.save(new Message(null, turn.id(), 3, "TOOL_RESULT", null, "call-1", "list_dir",
+            null, "a.txt\nb/", true, 120L, Instant.now()));
+
+        assertThat(turns.countByConversationId(conv.id())).isEqualTo(1);
+        List<Message> turnMessages = messages.findByTurnIdOrderBySeq(turn.id());
+        assertThat(turnMessages).hasSize(4).extracting(Message::msgType)
+            .containsExactly("USER", "THINKING", "TOOL_CALL", "TOOL_RESULT");
+
+        List<Message> timeline = messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id());
+        assertThat(timeline).hasSize(4);
+    }
+
+    @Test
+    void compactSummaryRoundTrip() {
+        Conversation conv = conversations.save(
+            new Conversation(null, "压缩会话", "conv-2", "此前会话摘要内容", Instant.now(), Instant.now()));
+        Conversation reloaded = conversations.findById(conv.id()).orElseThrow();
+        assertThat(reloaded.compactSummary()).isEqualTo("此前会话摘要内容");
+    }
+
+    @Test
+    void conversationTouchUpdatesUpdatedAt() {
+        Instant past = Instant.parse("2020-01-01T00:00:00Z");
+        Conversation conv = conversations.save(
+            new Conversation(null, "旧会话", "conv-3", null, past, past));
+
+        conversations.touch(conv.id());
+
+        Conversation reloaded = conversations.findById(conv.id()).orElseThrow();
+        assertThat(reloaded.updatedAt()).isAfter(past);
+    }
+
+    @Test
+    void findAllByOrderByUpdatedAtDescReturnsNewestFirst() {
+        Instant base = Instant.parse("2020-01-01T00:00:00Z");
+        conversations.save(new Conversation(null, "旧", "c-1", null, base, base));
+        conversations.save(new Conversation(null, "新", "c-2", null, base, base.plusSeconds(3600)));
+
+        List<Conversation> ordered = conversations.findAllByOrderByUpdatedAtDesc();
+        assertThat(ordered).extracting(Conversation::threadId).containsExactly("c-2", "c-1");
+    }
+
+    @Test
+    void turnLifecycleAndQueries() {
+        Conversation conv = conversations.save(
+            new Conversation(null, "多轮会话", "conv-4", null, Instant.now(), Instant.now()));
+        Turn first = turns.save(Turn.running(conv.id(), 1));
+        turns.save(first.complete("stop", "{\"total_tokens\":42}"));
+        turns.save(Turn.running(conv.id(), 2));
+
+        assertThat(turns.countByConversationId(conv.id())).isEqualTo(2);
+        assertThat(turns.findTopByConversationIdOrderBySeqDesc(conv.id()))
+            .hasValueSatisfying(last -> {
+                assertThat(last.seq()).isEqualTo(2);
+                assertThat(last.status()).isEqualTo("RUNNING");
+            });
+
+        List<Turn> ordered = turns.findByConversationIdOrderBySeqAsc(conv.id());
+        assertThat(ordered).extracting(Turn::seq).containsExactly(1, 2);
+    }
+
+    @Test
+    void crossTurnTimelineOrdersByTurnSeqThenMessageSeq() {
+        Conversation conv = conversations.save(
+            new Conversation(null, "跨轮会话", "conv-5", null, Instant.now(), Instant.now()));
+        Turn t1 = turns.save(Turn.running(conv.id(), 1));
+        Turn t2 = turns.save(Turn.running(conv.id(), 2));
+
+        messages.save(Message.user(t1.id(), 0, "第一轮"));
+        messages.save(Message.text(t1.id(), 1, "第一轮回答"));
+        messages.save(Message.user(t2.id(), 0, "第二轮"));
+        messages.save(Message.text(t2.id(), 1, "第二轮回答"));
+
+        List<Message> timeline = messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id());
+        assertThat(timeline).extracting(Message::content)
+            .containsExactly("第一轮", "第一轮回答", "第二轮", "第二轮回答");
+    }
+}
