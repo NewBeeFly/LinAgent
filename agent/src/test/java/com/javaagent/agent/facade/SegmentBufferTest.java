@@ -103,4 +103,55 @@ class SegmentBufferTest {
         buffer.flushThinking();
         assertThat(buffer.currentSeq()).isEqualTo(2);
     }
+
+    @Test
+    void concurrentAppendsAndToolCallsProduceUniqueContiguousSeqs() throws Exception {
+        RecordingRepo repo = new RecordingRepo();
+        SegmentBuffer buffer = new SegmentBuffer(1L, repo);
+
+        // 模拟三路并发写：side 流 appendThinking、main 流 appendText/flush、
+        // 拦截器 recordToolCall/recordToolResult（SAA 并行 tool call 时多线程）
+        int threads = 8;
+        int perThread = 200;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            int idx = i;
+            futures.add(pool.submit(() -> {
+                try {
+                    start.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                for (int j = 0; j < perThread; j++) {
+                    buffer.appendThinking("t" + idx);
+                    buffer.appendText("x" + idx);
+                    if (j % 5 == 0) {
+                        buffer.recordToolCall("c" + idx + "-" + j, "list_dir", "{}");
+                    }
+                    if (j % 7 == 0) {
+                        buffer.flushText();
+                    }
+                    if (j % 11 == 0) {
+                        buffer.recordToolResult("r" + idx + "-" + j, "list_dir", "ok", true, 1L);
+                    }
+                }
+            }));
+        }
+        start.countDown();
+        for (java.util.concurrent.Future<?> f : futures) {
+            f.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        pool.shutdown();
+        buffer.flushAll();
+
+        // 每次落库恰好消耗一个 seq：seq 必须无重复且连续（OrderBySeq 回放契约）
+        List<Integer> seqs = repo.saved.stream().map(Message::seq).toList();
+        assertThat(seqs)
+            .as("seq 无重复且连续：1..%d（实际落库 %d 条）", seqs.size(), repo.saved.size())
+            .containsExactlyElementsOf(
+                java.util.stream.IntStream.rangeClosed(1, seqs.size()).boxed().toList());
+    }
 }

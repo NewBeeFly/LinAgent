@@ -63,7 +63,10 @@ public class AgentFacade {
             messages.save(Message.user(turn.id(), 0, content));
 
             SegmentBuffer buffer = new SegmentBuffer(turn.id(), messages);
-            Sinks.Many<Object> sideEvents = Sinks.many().unicast().onBackpressureBuffer();
+            // 三路发射方（ThinkingTap / 工具拦截器，SAA 并行 tool call 时多线程）共享同一
+            // unicast sink：经 SerializedEmitSink 串行收口，避免 FAIL_NON_SERIALIZED 静默丢事件
+            Sinks.Many<Object> sideEvents =
+                new SerializedEmitSink(Sinks.many().unicast().onBackpressureBuffer());
             AtomicReference<Object> usageCapture = new AtomicReference<>();
 
             EventEmittingToolInterceptor toolInterceptor =
