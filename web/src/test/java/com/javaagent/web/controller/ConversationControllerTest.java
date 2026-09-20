@@ -8,6 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.javaagent.agent.facade.AgentFacade;
+import com.javaagent.agent.persistence.CheckpointCleaner;
 import com.javaagent.agent.persistence.ConversationRepository;
 import com.javaagent.agent.persistence.MessageRepository;
 import com.javaagent.agent.persistence.TurnRepository;
@@ -29,6 +30,7 @@ class ConversationControllerTest {
     @MockBean ConversationRepository conversations;
     @MockBean TurnRepository turns;
     @MockBean MessageRepository messages;
+    @MockBean CheckpointCleaner checkpointCleaner;
 
     @Test
     void createReturnsConversation() throws Exception {
@@ -79,5 +81,31 @@ class ConversationControllerTest {
     void deleteReturnsNoContent() throws Exception {
         mockMvc.perform(delete("/api/conversations/1"))
             .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void deleteCascadesCheckpointCleanupThenRemovesConversation() throws Exception {
+        when(conversations.findById(1L)).thenReturn(java.util.Optional.of(
+            new com.javaagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null,
+                java.time.Instant.now(), java.time.Instant.now())));
+
+        mockMvc.perform(delete("/api/conversations/1"))
+            .andExpect(status().isNoContent());
+
+        // checkpoint 级联清理（Errata 3）：按会话 id 清 conv-1 / conv-1-v* 线程，且先于会话行删除
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(checkpointCleaner, conversations);
+        order.verify(checkpointCleaner).deleteByConversationId(1L);
+        order.verify(conversations).deleteById(1L);
+    }
+
+    @Test
+    void deleteUnknownConversationSkipsCleanup() throws Exception {
+        when(conversations.findById(404L)).thenReturn(java.util.Optional.empty());
+
+        mockMvc.perform(delete("/api/conversations/404"))
+            .andExpect(status().isNoContent());
+
+        org.mockito.Mockito.verify(checkpointCleaner, org.mockito.Mockito.never())
+            .deleteByConversationId(org.mockito.ArgumentMatchers.anyLong());
     }
 }
