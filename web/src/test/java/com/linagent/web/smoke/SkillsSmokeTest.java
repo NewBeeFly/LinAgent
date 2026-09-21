@@ -33,6 +33,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 前置（manual 运行环境，不进 CI）：
  * 1. 本地 PG 可达：localhost:5432/linagent（容器 pg-jiege，flyway 启动幂等补齐 schema）
  * 2. web/src/main/resources/application-local.yml 提供真实 STEPFUN_API_KEY（已 gitignore）
+ * 3. 身份：v0.2 起所有请求必须带身份 header（app_user 校验，未知 401）。本测试默认身份
+ *    default/linmj（V4 种子）已由 @BeforeEach 统一注入（TestAuth.LINMJ）；curl 手工验证
+ *    同样必须带 x-tenant-id / x-user-id 两个 header。
  *
  * 运行：mvn -pl web test -Dtest=SkillsSmokeTest -Dgroups=manual
  * （需要本地仓库已 install agent 模块：mvn -pl agent install -DskipTests）
@@ -69,13 +72,21 @@ class SkillsSmokeTest {
         （JSONB 键序由 PG 归一化，字段与 AgentEvent.Usage record 一致）
         """;
 
-    /** 冒烟工作区：data.csv 两行数据（表头 + 2 行） */
+    /** 冒烟工作区（v0.2 多租户布局）：
+     *  个人根 {root}/default/users/linmj/ 放 data.csv（表头 + 2 行）——工具实例随轮构造、
+     *  根已烤入 personalRoot，扁平基根下放种子不再被 csv_summary 读到；
+     *  租户共享区 {root}/default/shared/ 放 团队规范.txt——WorkspaceResolver 幂等 provision
+     *  会在个人根内建 shared → ../../shared 相对符号链接，此文件可验证共享区挂载。 */
     static final Path workspaceRoot = createWorkspace();
 
     static Path createWorkspace() {
         try {
             Path dir = Files.createTempDirectory("skills-smoke-workspace");
-            Files.writeString(dir.resolve("data.csv"), "name,score\nalice,90\nbob,85\n");
+            Path personal = Files.createDirectories(
+                dir.resolve("default").resolve("users").resolve("linmj"));
+            Files.writeString(personal.resolve("data.csv"), "name,score\nalice,90\nbob,85\n");
+            Path shared = Files.createDirectories(dir.resolve("default").resolve("shared"));
+            Files.writeString(shared.resolve("团队规范.txt"), "团队规范：共享区挂载验证种子\n");
             return dir;
         } catch (IOException e) {
             throw new IllegalStateException("构造冒烟工作区失败", e);
