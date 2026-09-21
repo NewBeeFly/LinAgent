@@ -13,10 +13,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-// V4 会 ALTER TABLE conversation，故需先加载 V1 建立 conversation 表（与 RepositoryTest 同一先例）
 @DataJdbcTest(properties = {
     "spring.sql.init.mode=always",
-    "spring.sql.init.schema-locations=classpath:db/migration/V1__init.sql,classpath:db/migration/V4__multi_tenant.sql"
+    "spring.sql.init.schema-locations=classpath:db/migration/V4__multi_tenant.sql"
 })
 @Import(AppUserRepository.class)
 @Testcontainers
