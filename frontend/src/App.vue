@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, reactive } from 'vue'
 import { streamSse } from './api/sse'
 import { createConversation, getTurns, listConversations } from './api/rest'
 import { applySseEvent, failTurn, newTurn, turnFromRecord } from './turn'
@@ -39,7 +39,9 @@ const send = async () => {
   const text = input.value
   input.value = ''
   sending.value = true
-  const turn: ChatTurn = newTurn(text)
+  // reactive 包裹：流式增量直接驱动重渲染（raw 对象的修改不触发响应式，
+  // 会导致整轮内容等流结束才一次性出现）
+  const turn: ChatTurn = reactive(newTurn(text))
   turns.value.push(turn)
   try {
     await streamSse(`/api/conversations/${activeId.value}/chat`, { content: text }, (ev) => {
@@ -54,6 +56,10 @@ const send = async () => {
   } finally {
     sending.value = false
   }
+}
+
+const fillPrompt = (text: string) => {
+  input.value = text
 }
 
 onMounted(async () => {
@@ -74,6 +80,20 @@ onMounted(async () => {
     </aside>
     <main class="chat">
       <div class="timeline">
+        <div v-if="turns.length === 0" class="welcome">
+          <h2>你好，我是你的个人小助手 🤖</h2>
+          <p>我可以陪你聊天、答疑、写文案，也能在需要时动用工具干活：</p>
+          <ul>
+            <li>📂 读写工作区文件、列目录</li>
+            <li>💻 执行 Shell 命令</li>
+            <li>🧠 按需加载技能（如 CSV 分析、Markdown 报告）</li>
+          </ul>
+          <p class="try">试试：</p>
+          <div class="prompts">
+            <button v-for="p in ['用一句话介绍你自己', '列出工作区里有什么文件', '写一段五十字的产品介绍']"
+                    :key="p" @click="fillPrompt(p)">{{ p }}</button>
+          </div>
+        </div>
         <div v-for="(turn, i) in turns" :key="i" class="turn">
           <MessageBubble role="user" :content="turn.userText" v-if="turn.userText" />
           <ThinkingBlock :content="turn.thinking" :streaming="turn.status === 'streaming'" v-if="turn.thinking" />
@@ -102,4 +122,14 @@ onMounted(async () => {
 .composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #eee; }
 .composer textarea { flex: 1; resize: none; height: 60px; border-radius: 8px; border: 1px solid #ccc; padding: 8px; }
 .error-line { color: #d93025; font-size: 13px; margin: 4px 0; }
+.welcome { padding: 48px 32px; color: #333; }
+.welcome h2 { font-size: 20px; margin-bottom: 8px; }
+.welcome ul { margin: 8px 0 16px; padding-left: 20px; line-height: 1.9; color: #555; }
+.welcome .try { font-size: 13px; color: #888; margin-bottom: 6px; }
+.prompts { display: flex; flex-wrap: wrap; gap: 8px; }
+.prompts button {
+  border: 1px solid #d0e0f0; background: #f5f9ff; color: #1a73e8;
+  border-radius: 16px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+.prompts button:hover { background: #e8f0fe; }
 </style>

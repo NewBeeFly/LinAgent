@@ -92,3 +92,34 @@ describe('历史回放（select 路径）', () => {
     ])
   })
 })
+
+describe('响应式触发（回归：流式增量必须驱动重渲染）', () => {
+  it('reactive turn 上的 applySseEvent 变更会触发依赖更新（raw 对象不会——这正是一次性渲染的根因）', async () => {
+    const { reactive, computed, nextTick } = await import('vue')
+    const turn = reactive(newTurn('你好'))
+    let evaluations = 0
+    const renderedText = computed(() => {
+      evaluations++
+      return turn.text
+    })
+    expect(renderedText.value).toBe('')
+    const baseline = evaluations
+
+    applySseEvent(turn, { event: 'message_delta', data: { content: '第一' } })
+    applySseEvent(turn, { event: 'message_delta', data: { content: '段' } })
+
+    expect(renderedText.value).toBe('第一段')
+    expect(evaluations).toBeGreaterThan(baseline)
+  })
+
+  it('reactive turn 的 tools push 同样触发依赖更新', async () => {
+    const { reactive, computed } = await import('vue')
+    const turn = reactive(newTurn('你好'))
+    const toolCount = computed(() => turn.tools.length)
+    expect(toolCount.value).toBe(0)
+
+    applySseEvent(turn, { event: 'tool_call', data: { callId: 'c1', toolName: 'list_dir', arguments: '{}' } })
+
+    expect(toolCount.value).toBe(1)
+  })
+})
