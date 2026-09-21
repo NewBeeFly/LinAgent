@@ -90,16 +90,26 @@ turn/message/checkpoint 不动：threadId 前缀 `conv-{id}` 随 conversation �
 
 以 `POST /api/conversations/{id}/chat`（SSE）为例：
 
-1. **Filter（请求线程）**：header 缺失或 app_user 未命中 → 401 JSON（不再进 DispatcherServlet）；命中 → `Holder.set`
-2. **facade.chat() 同步段**（controller 方法体内同步执行，仍在请求线程）：`Holder.require()` → ctx；
-   conversation 归属校验（SQL 带 tenant/user 条件，未命中 → 404）→ `AgentFactory.create(ctx)` →
-   `WorkspaceResolver.ensure()` → 构造 FileTools/ShellTool2/CsvSummaryTool（烤入个人根）
+1. **Filter（请求线程）**：header 缺失或 app_user 未命中 → 401 JSON（不再进 DispatcherServlet）；
+   命中 → `Holder.set`。**doFilter 开头先防御性 clear 一次**（双保险：即使上一请求异常残留也不串号）
+2. **facade.chat() 方法体第一行（请求线程同步执行）**：`AuthContext ctx = AuthContextHolder.require()`
+   ——**必须在 `Flux.defer` 外捕获，闭包带入 lambda**。红线依据（已核实现状代码）：`AgentFacade.chat()`
+   现为 `Flux.defer(() -> {...})` 结构，会话校验与 `agentFactory.create()` 都在**订阅期**于 reactor 线程
+   执行，届时 Filter finally 已清理、且不在同一线程——defer 内读 Holder 必炸。改造即：defer 外读一次，
+   defer 内只用闭包变量
 3. **Flux 订阅后（reactor 线程）**：工具执行用实例内路径；turn/message 落库随 conversation，不需要 ctx
-4. **Filter finally clear**：异步 SSE 下 finally 早于流结束触发**无碍**——所有 Holder 读取锁死在第 2 步同步段
-   （已核实 ChatController 直接调用 `agentFacade.chat(...)` 于方法体内，装配发生在请求线程）
+4. **Filter finally clear**：正常/异常两路都清；异步 SSE 下 finally 早于流结束触发无碍（读取已锁死在第 2 步）
 
-纪律一句话：**ThreadLocal 是边界运输工具——web 入口 set，agent 入口同步段读一次，其余显式传参；
-执行期（reactor 线程）零 ThreadLocal 依赖。**
+纪律一句话：**ThreadLocal 是边界运输工具——web 入口 set，facade 入口 defer 外读一次捕获进闭包，
+其余显式传参；执行期（reactor 线程）零 ThreadLocal 依赖。**
+
+ThreadLocal 清理清单（全部落地 + 测试守护）：
+
+- Filter `try-finally` clear（异常路径同样覆盖）
+- Filter 开头防御性 clear（线程池复用防残留）
+- `Holder.require()` 缺失即抛 ISE——任何越界读取第一时间暴露而非静默串号
+- 守护测试：FilterTest 断言请求结束后 `Holder.get() == null`；连续两次请求（第二次不带 header）
+  第二次必须 401 而非继承首次身份（专防池化线程残留）
 
 ## 6. 工作区布局与解析
 
@@ -117,12 +127,31 @@ turn/message/checkpoint 不动：threadId 前缀 `conv-{id}` 随 conversation �
 
 ## 7. 错误处理
 
+### 7.1 后端语义
+
 | 场景 | 行为 |
 |---|---|
 | 缺 header / app_user 未命中 | 401，JSON body 说明缺什么 |
 | conversation 不存在或不属于当前 (tenant,user) | 404（不泄漏存在性），chat 与 CRUD 一致 |
 | WorkspaceResolver provisioning IO 失败 | 500，异常信息带目标路径 |
 | Holder.require() 在无上下文时被调用（内部误用） | IllegalStateException，500（设计缺陷信号，测试守护） |
+
+### 7.2 前端兼容（用户无感知红线：禁止裸 404/401 透出）
+
+现状（已核实）：`rest.ts`/`sse.ts` 统一 `throw Error("HTTP 404")`，`deleteConversation` 不检查
+`resp.ok`，401/404 对用户是天书。本期补齐：
+
+- **类型化错误**：`rest.ts`/`sse.ts` 抛 `ApiError{status, message}`（携带后端 JSON message），
+  替代裸 `HTTP xxx`
+- **401（身份无效）**：全局提示"当前身份（{tenant}/{user}）未注册或已失效，请检查
+  VITE_TENANT_ID / VITE_USER_ID 配置"——env 身份无登录可跳，指向配置是唯一出路
+- **404（会话不可用）场景化处理**：
+  - `getTurns` 404 → 提示"该会话不存在或无权访问"，自动从侧栏移除该会话，回到欢迎面板
+  - chat 404 → 当前 turn 展示"该会话已不可用（可能已删除或归属其他用户）"，并刷新会话列表
+  - `deleteConversation` 404 → **幂等成功**处理：视为已删除，直接移除列表项（不报错）
+- 404 高发于切换身份后旧列表残留 / 会话被并发删除 / 深链直达——列表本身已按身份过滤，
+  上述兜底保证边缘路径不裸奔
+- 前端单测（vitest 已有基建）：ApiError 分类、404 分支文案
 
 ## 8. 测试
 
