@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, reactive, watch } from 'vue'
 import { streamSse } from './api/sse'
-import { createConversation, getTurns, listConversations } from './api/rest'
+import { createConversation, fetchIdentityOptions, getTurns, listConversations } from './api/rest'
+import type { TenantIdentityOptions } from './api/rest'
 import { ApiError } from './api/error'
-import { TENANT_ID, USER_ID } from './api/identity'
+import { currentIdentity, setIdentity } from './api/identity'
 import { applySseEvent, failTurn, newTurn, thinkingActive, turnFromRecord } from './turn'
 import type { ChatTurn, TurnRecord } from './types'
 import ThinkingBlock from './components/ThinkingBlock.vue'
@@ -22,9 +23,28 @@ const timelineEl = ref<HTMLElement | null>(null)
 
 const globalError = ref('')
 
-// 401：身份无效——指向 env 配置（无登录可跳，唯一出路）
-const authErrorMessage = () =>
-  `当前身份（${TENANT_ID}/${USER_ID}）未注册或已失效，请检查 VITE_TENANT_ID / VITE_USER_ID 配置`
+// 身份切换器：候选来自 /api/identity/options（免鉴权）；拉取失败隐藏切换器不影响使用
+const identityOptions = ref<TenantIdentityOptions[]>([])
+const identityKey = ref(`${currentIdentity().tenantId}/${currentIdentity().userId}`)
+
+// 401：身份无效——切换身份或检查 env 配置（无登录可跳）
+const authErrorMessage = () => {
+  const cur = currentIdentity()
+  return `当前身份（${cur.tenantId}/${cur.userId}）未注册或已失效，请切换身份或检查 VITE_TENANT_ID / VITE_USER_ID 配置`
+}
+
+// 切换身份：写记忆、清视图状态、按新身份重拉会话列表
+const switchIdentity = async (key: string) => {
+  const [tenantId, userId] = key.split('/')
+  if (!tenantId || !userId || key === identityKey.value) return
+  setIdentity(tenantId, userId)
+  identityKey.value = key
+  conversations.value = []
+  activeId.value = null
+  turns.value = []
+  globalError.value = ''
+  await refresh()
+}
 
 // 会话不可用：从列表移除并回到欢迎态（activeId 置空）
 const dropConversation = (id: number) => {
@@ -131,6 +151,11 @@ const fillPrompt = (text: string) => {
 }
 
 onMounted(async () => {
+  try {
+    identityOptions.value = await fetchIdentityOptions()
+  } catch {
+    identityOptions.value = [] // 后端未起等场景：切换器隐藏，退化为 env 身份
+  }
   await refresh()
   if (conversations.value.length === 0) await newChat()
   else await select(conversations.value[0].id)
@@ -146,6 +171,15 @@ onMounted(async () => {
         <span class="mark"></span>
         <span class="name">LinAgent</span>
       </div>
+      <select v-if="identityOptions.length" class="identity" :value="identityKey"
+              aria-label="切换身份"
+              @change="switchIdentity(($event.target as HTMLSelectElement).value)">
+        <optgroup v-for="t in identityOptions" :key="t.tenantId" :label="t.tenantId">
+          <option v-for="u in t.users" :key="u.userId" :value="`${t.tenantId}/${u.userId}`">
+            {{ u.name }}（{{ u.userId }}）
+          </option>
+        </optgroup>
+      </select>
       <button class="new" @click="newChat">新对话</button>
       <div class="conv-list">
         <div v-for="c in conversations" :key="c.id"
@@ -232,6 +266,17 @@ onMounted(async () => {
   letter-spacing: -0.02em;
   color: var(--ink);
 }
+.identity {
+  border: 1px solid var(--pine);
+  background: transparent;
+  color: var(--pine);
+  border-radius: var(--radius-md);
+  padding: 7px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  width: 100%;
+}
+
 .new {
   border: 1px solid var(--pine);
   background: transparent;

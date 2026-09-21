@@ -1,11 +1,24 @@
 import { ApiError } from './error'
 import { identityHeaders } from './identity'
 
-const json = async (url: string, init?: RequestInit) => {
+const json = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const resp = await fetch(url, { ...init, headers: { ...identityHeaders(), ...(init?.headers ?? {}) } })
   if (!resp.ok) throw await ApiError.from(resp)
   return resp.json()
 }
+
+export interface IdentityOption {
+  userId: string
+  name: string
+}
+
+export interface TenantIdentityOptions {
+  tenantId: string
+  users: IdentityOption[]
+}
+
+/** 身份候选名单（后端 /api/identity/options，免鉴权） */
+export const fetchIdentityOptions = () => json<TenantIdentityOptions[]>('/api/identity/options')
 
 export const listConversations = () => json('/api/conversations')
 export const createConversation = (title?: string) =>

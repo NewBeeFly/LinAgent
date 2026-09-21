@@ -27,6 +27,8 @@ public class AuthContextFilter extends OncePerRequestFilter {
 
     static final String TENANT_HEADER = "x-tenant-id";
     static final String USER_HEADER = "x-user-id";
+    /** 身份候选名单路径：免鉴权（切换器需在任何身份生效前拿到候选）。登录体系上线时收紧 */
+    static final String IDENTITY_OPTIONS_PATH = "/api/identity/options";
 
     private final RequestAuthenticator authenticator;
 
@@ -36,7 +38,11 @@ public class AuthContextFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/api");
+        String uri = request.getRequestURI();
+        if (IDENTITY_OPTIONS_PATH.equals(uri)) {
+            return true;
+        }
+        return !uri.startsWith("/api");
     }
 
     /**

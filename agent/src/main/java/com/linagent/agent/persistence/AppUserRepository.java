@@ -28,4 +28,12 @@ public class AppUserRepository {
             tenantId, userId);
         return rows.stream().findFirst();
     }
+
+    /** 身份候选名单（IdentityController 消费），按租户、用户稳定排序 */
+    public List<AppUser> findAll() {
+        return jdbcTemplate.query(
+            "SELECT tenant_id, user_id, name, created_at FROM app_user ORDER BY tenant_id, user_id",
+            (rs, i) -> new AppUser(rs.getString(1), rs.getString(2), rs.getString(3),
+                rs.getTimestamp(4).toInstant()));
+    }
 }
