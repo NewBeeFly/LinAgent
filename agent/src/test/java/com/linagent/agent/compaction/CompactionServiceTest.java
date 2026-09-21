@@ -49,7 +49,7 @@ class CompactionServiceTest {
     @Test
     void underThresholdReturnsEmptyWithoutSideEffects() {
         when(conversations.findById(1L)).thenReturn(Optional.of(
-            new Conversation(1L, "t", "conv-1", null, 0, Instant.now(), Instant.now())));
+            new Conversation(1L, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now())));
         when(turns.findByConversationIdOrderBySeqAsc(1L)).thenReturn(List.of(turn(1L, 1)));
         when(messages.findByConversationIdOrderByTurnIdAscSeqAsc(1L)).thenReturn(
             List.of(msg(1L, 0, "USER", "短对话")));
@@ -63,7 +63,7 @@ class CompactionServiceTest {
 
     @Test
     void overThresholdSummarizesAndPersistsCompactSummaryWithNewThreadId() {
-        Conversation conv = new Conversation(1L, "t", "conv-1", null, 0, Instant.now(), Instant.now());
+        Conversation conv = new Conversation(1L, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now());
         when(conversations.findById(1L)).thenReturn(Optional.of(conv));
         when(turns.findByConversationIdOrderBySeqAsc(1L))
             .thenReturn(List.of(turn(1L, 1), turn(2L, 2)));
@@ -98,7 +98,7 @@ class CompactionServiceTest {
 
     @Test
     void versionedThreadIncrementsVersion() {
-        Conversation conv = new Conversation(1L, "t", "conv-1-v2", "旧摘要", 2, Instant.now(), Instant.now());
+        Conversation conv = new Conversation(1L, "t", "conv-1-v2", "旧摘要", 2, "default", "linmj", Instant.now(), Instant.now());
         when(conversations.findById(1L)).thenReturn(Optional.of(conv));
         when(turns.findByConversationIdOrderBySeqAsc(1L))
             .thenReturn(List.of(turn(1L, 1), turn(2L, 2), turn(3L, 3)));
@@ -126,7 +126,7 @@ class CompactionServiceTest {
      */
     @Test
     void incrementalUnderThresholdDoesNotRecompact() {
-        Conversation conv = new Conversation(1L, "t", "conv-1-v1", "既有摘要", 2, Instant.now(), Instant.now());
+        Conversation conv = new Conversation(1L, "t", "conv-1-v1", "既有摘要", 2, "default", "linmj", Instant.now(), Instant.now());
         when(conversations.findById(1L)).thenReturn(Optional.of(conv));
         when(turns.findByConversationIdOrderBySeqAsc(1L))
             .thenReturn(List.of(turn(1L, 1), turn(2L, 2), turn(3L, 3)));
@@ -151,7 +151,7 @@ class CompactionServiceTest {
      */
     @Test
     void incrementalOverThresholdRecompactsWithOnlyNewContent() {
-        Conversation conv = new Conversation(1L, "t", "conv-1-v1", "既有摘要", 2, Instant.now(), Instant.now());
+        Conversation conv = new Conversation(1L, "t", "conv-1-v1", "既有摘要", 2, "default", "linmj", Instant.now(), Instant.now());
         when(conversations.findById(1L)).thenReturn(Optional.of(conv));
         when(turns.findByConversationIdOrderBySeqAsc(1L))
             .thenReturn(List.of(turn(1L, 1), turn(2L, 2), turn(3L, 3)));
@@ -189,7 +189,7 @@ class CompactionServiceTest {
     @Test
     void summaryOnlyOverThresholdWithoutIncrementReturnsEmpty() {
         Conversation conv = new Conversation(1L, "t", "conv-1-v1", "s".repeat(100_000), 5,
-            Instant.now(), Instant.now());
+            "default", "linmj", Instant.now(), Instant.now());
         when(conversations.findById(1L)).thenReturn(Optional.of(conv));
         when(turns.findByConversationIdOrderBySeqAsc(1L)).thenReturn(List.of(turn(1L, 1)));
         when(messages.findByConversationIdOrderByTurnIdAscSeqAsc(1L)).thenReturn(
@@ -214,7 +214,7 @@ class CompactionServiceTest {
     @Test
     void toolResultContentCountsTowardEstimate() {
         when(conversations.findById(1L)).thenReturn(Optional.of(
-            new Conversation(1L, "t", "conv-1", null, 0, Instant.now(), Instant.now())));
+            new Conversation(1L, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now())));
         when(turns.findByConversationIdOrderBySeqAsc(1L)).thenReturn(List.of(turn(1L, 1)));
         // content null、result 100k 字符 → 25k tokens > 24000
         when(messages.findByConversationIdOrderByTurnIdAscSeqAsc(1L)).thenReturn(List.of(

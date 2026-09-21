@@ -105,7 +105,7 @@ class AgentFacadeTest {
     @Test
     void chatEmitsMetaDeltaTurnDoneAndPersistsCompleteMessages() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta m && m.model().equals("step-3.7-flash"))
@@ -134,7 +134,7 @@ class AgentFacadeTest {
     void chatWithoutCapturedUsageFallsBackToZeroUsageJson() {
         stubUsage = null;
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta)
@@ -154,7 +154,7 @@ class AgentFacadeTest {
     @Test
     void chatPersistsUserMessageWithSeqZero() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
         facade.chat(conv.id(), "问题").blockLast();
 
         assertThat(messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id()).get(0).seq()).isEqualTo(0);
@@ -163,7 +163,7 @@ class AgentFacadeTest {
     @Test
     void thinkingAndToolEventsFromSideSinkAreMergedAndPersisted() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
         // side 流两种载荷形态：String（thinking 增量，来自 ThinkingTap）与
         // 已构造好的 AgentEvent.ToolCall（来自 EventEmittingToolInterceptor）
         stubSideEvents.add("思");
@@ -193,7 +193,7 @@ class AgentFacadeTest {
     @Test
     void chatErrorEmitsTurnErrorMarksTurnFailedAndKeepsStreamComplete() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
         stubMainFlux = Flux.error(new RuntimeException("模型连接失败"));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
@@ -213,7 +213,7 @@ class AgentFacadeTest {
     @Test
     void chatCancelMarksTurnFailedAndPersistsCompletedSegments() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
         // 主流发出首个 chunk 后挂起：订阅方在收到部分内容后取消（SSE 断连场景）
         stubMainFlux = Flux.just(stubStreamingOutput("回"))
             .concatWith(Flux.never());
@@ -242,7 +242,7 @@ class AgentFacadeTest {
     @Test
     void chatCancelAfterTurnDoneKeepsCompletedStatus() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta)
@@ -264,11 +264,11 @@ class AgentFacadeTest {
     @Test
     void chatRunsCompactionAndSwitchesToNewThreadWithSummaryPrefix() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
         // 模拟 CompactionService 的副作用：更新 conversation 的 threadId + compact_summary
         when(compaction.compactIfNeeded(conv.id())).thenAnswer(inv -> {
             conversations.save(new Conversation(conv.id(), conv.title(), "conv-1-v1",
-                "压缩后的历史摘要", 2, conv.createdAt(), Instant.now()));
+                "压缩后的历史摘要", 2, conv.tenantId(), conv.userId(), conv.createdAt(), Instant.now()));
             return Optional.of("conv-1-v1");
         });
 
@@ -300,7 +300,7 @@ class AgentFacadeTest {
     void chatWithExistingCompactSummaryAlwaysPrependsSummarySystemMessage() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
         // 已压缩会话（compact_summary 已存在、本轮未再触发压缩）：摘要常驻输入
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1-v1", "既有摘要", 2, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1-v1", "既有摘要", 2, "default", "linmj", Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "继续"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta)
@@ -320,7 +320,7 @@ class AgentFacadeTest {
     @Test
     void chatWithoutSummarySendsPlainUserMessage() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
         facade.chat(conv.id(), "你好").blockLast();
 
         ArgumentCaptor<UserMessage> inputCaptor = ArgumentCaptor.forClass(UserMessage.class);
@@ -342,7 +342,8 @@ class AgentFacadeTest {
         @Override public <S extends Conversation> S save(S e) {
             Long id = e.id() == null ? nextId++ : e.id();
             Conversation saved = new Conversation(id, e.title(), e.threadId(), e.compactSummary(),
-                e.compactedTurnSeq() == null ? 0 : e.compactedTurnSeq(), e.createdAt(), e.updatedAt());
+                e.compactedTurnSeq() == null ? 0 : e.compactedTurnSeq(),
+                e.tenantId(), e.userId(), e.createdAt(), e.updatedAt());
             data.removeIf(c -> c.id().equals(id));
             data.add(saved);
             return (S) saved;
@@ -365,12 +366,25 @@ class AgentFacadeTest {
         @Override public void deleteAll(Iterable<? extends Conversation> entities) { entities.forEach(this::delete); }
         @Override public void deleteAll() { data.clear(); }
         @Override public List<Conversation> findAllByOrderByUpdatedAtDesc() { return List.copyOf(data); }
-        /** Task 3 声明的多租户查询：实体归属列 Task 4 才补，本 double 尚无字段可过滤，先与全量查询一致（AgentFacadeTest 不触列表查询） */
-        @Override public List<Conversation> findByTenantIdAndUserIdOrderByUpdatedAtDesc(String tenantId, String userId) { return findAllByOrderByUpdatedAtDesc(); }
+        /** 多租户查询（Task 4 起真实按归属过滤，防跨任务静默串租户） */
+        @Override public List<Conversation> findByTenantIdAndUserIdOrderByUpdatedAtDesc(String tenantId, String userId) {
+            return data.stream()
+                .filter(c -> java.util.Objects.equals(c.tenantId(), tenantId)
+                    && java.util.Objects.equals(c.userId(), userId))
+                .toList();
+        }
+        @Override public Optional<Conversation> findByIdAndTenantIdAndUserId(Long id, String tenantId, String userId) {
+            return data.stream()
+                .filter(c -> c.id().equals(id)
+                    && java.util.Objects.equals(c.tenantId(), tenantId)
+                    && java.util.Objects.equals(c.userId(), userId))
+                .findFirst();
+        }
         @Override public void touch(Long id) {
             findById(id).ifPresent(c ->
                 data.set(data.indexOf(c), new Conversation(c.id(), c.title(), c.threadId(),
-                    c.compactSummary(), c.compactedTurnSeq(), c.createdAt(), Instant.now())));
+                    c.compactSummary(), c.compactedTurnSeq(), c.tenantId(), c.userId(),
+                    c.createdAt(), Instant.now())));
         }
     }
 

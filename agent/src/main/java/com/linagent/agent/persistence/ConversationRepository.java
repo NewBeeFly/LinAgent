@@ -5,6 +5,7 @@ import org.springframework.data.jdbc.repository.query.Query;
 import org.springframework.data.repository.CrudRepository;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface ConversationRepository extends CrudRepository<Conversation, Long> {
 
@@ -20,6 +21,9 @@ public interface ConversationRepository extends CrudRepository<Conversation, Lon
     @Query("SELECT * FROM conversation WHERE tenant_id = :tenantId AND user_id = :userId "
         + "ORDER BY updated_at DESC")
     List<Conversation> findByTenantIdAndUserIdOrderByUpdatedAtDesc(String tenantId, String userId);
+
+    /** 单查按归属收敛：实体补齐归属字段后（Task 4），派生查询即可用（Task 3 实证） */
+    Optional<Conversation> findByIdAndTenantIdAndUserId(Long id, String tenantId, String userId);
 
     @Modifying
     @Query("UPDATE conversation SET updated_at = now() WHERE id = :id")
