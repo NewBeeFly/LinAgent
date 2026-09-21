@@ -1,4 +1,4 @@
-# javaAgent
+# LinAgent
 
 基于 Spring AI Alibaba 1.1.2.3 ReactAgent 的 ReAct Agent 服务。
 
@@ -11,11 +11,11 @@
 
 ## 启动
 
-前置：JDK 21、Maven 3.8+、Node 18+、PostgreSQL（本库 `javaagent`，建库见下）与
+前置：JDK 21、Maven 3.8+、Node 18+、PostgreSQL（本库 `linagent`，建库见下）与
 `web/src/main/resources/application-local.yml`（含 PG 与 StepFun 密钥，已 gitignore）。
 
 ```bash
-psql -h localhost -U jiege -d postgres -c "CREATE DATABASE javaagent OWNER jiege;"
+psql -h localhost -U jiege -d postgres -c "CREATE DATABASE linagent OWNER jiege;"
 mvn -pl web spring-boot:run        # 后端 :8080
 cd frontend && npm install && npm run dev   # 前端 :5173（代理 /api）
 ```

@@ -2,7 +2,7 @@
 # api-key 不入库，运行 manual 探针时通过环境变量 STEPFUN_API_KEY 注入。
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/javaagent
+    url: jdbc:postgresql://localhost:5432/linagent
     username: jiege
     # 密码走环境变量占位，缺省值仅本机开发库（不入库真实凭据）
     password: ${DB_PASSWORD:jiege666}
