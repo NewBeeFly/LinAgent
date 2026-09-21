@@ -1,6 +1,7 @@
 package com.linagent.web.controller;
 
 import com.linagent.agent.facade.AgentEvent;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
@@ -15,7 +16,11 @@ import com.linagent.agent.facade.AgentFacade;
 import com.linagent.agent.persistence.ConversationRepository;
 import com.linagent.agent.persistence.MessageRepository;
 import com.linagent.agent.persistence.TurnRepository;
+import com.linagent.web.auth.RequestAuthenticator;
 import com.linagent.web.stream.SseEventMapper;
+import com.linagent.web.support.TestAuth;
+
+import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -37,6 +42,16 @@ class ChatControllerSseTest {
     @MockBean ConversationRepository conversations;
     @MockBean TurnRepository turns;
     @MockBean MessageRepository messages;
+    /** 鉴权链（Task 3）：@WebMvcTest 自动装配 Filter 类型 Bean（AuthContextFilter），
+     *  RequestAuthenticator 不在切片内须 @MockBean 打桩，否则上下文起不来/请求 401 */
+    @MockBean RequestAuthenticator authenticator;
+
+    @BeforeEach
+    void auth() {
+        webTestClient = webTestClient.mutate().defaultHeaders(TestAuth.LINMJ).build();
+        when(authenticator.authenticate("default", "linmj"))
+            .thenReturn(Optional.of(TestAuth.LINMJ_CTX));
+    }
 
     @Test
     void chatStreamsSseEventsInOrder() {

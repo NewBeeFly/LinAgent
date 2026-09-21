@@ -1,5 +1,6 @@
 package com.linagent.web.smoke;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,6 +10,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
+
+import com.linagent.web.support.TestAuth;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -103,9 +106,18 @@ class SkillsSmokeTest {
     @Autowired
     org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
+    /** 鉴权链（Task 3）：全上下文真实 HeaderUserAuthenticator + V4 种子（default/linmj），
+     *  只补默认身份 header；原有 responseTimeout mutate 链合并进同一次 */
+    @BeforeEach
+    void auth() {
+        webTestClient = webTestClient.mutate()
+            .responseTimeout(Duration.ofSeconds(300))
+            .defaultHeaders(TestAuth.LINMJ)
+            .build();
+    }
+
     @Test
     void skillsChainLoadsCsvAnalysisThenRunsCsvSummaryTool() {
-        webTestClient = webTestClient.mutate().responseTimeout(Duration.ofSeconds(300)).build();
 
         // 真实模型存在不触发工具的随机性：明确指令 + 最多 3 次重试（每次全新会话，互不污染）
         List<String> attemptBodies = new ArrayList<>();

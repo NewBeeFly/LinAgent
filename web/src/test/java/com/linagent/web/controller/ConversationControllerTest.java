@@ -1,9 +1,11 @@
 package com.linagent.web.controller;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -12,8 +14,11 @@ import com.linagent.agent.persistence.CheckpointCleaner;
 import com.linagent.agent.persistence.ConversationRepository;
 import com.linagent.agent.persistence.MessageRepository;
 import com.linagent.agent.persistence.TurnRepository;
+import com.linagent.web.auth.RequestAuthenticator;
+import com.linagent.web.support.TestAuth;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -34,6 +39,24 @@ class ConversationControllerTest {
     @MockBean TurnRepository turns;
     @MockBean MessageRepository messages;
     @MockBean CheckpointCleaner checkpointCleaner;
+    /** 鉴权链（Task 3）：@WebMvcTest 自动装配 AuthContextFilter，RequestAuthenticator
+     *  不在切片内须 @MockBean 打桩（MockMvc 无 defaultHeaders，请求统一带 authHeaders） */
+    @MockBean RequestAuthenticator authenticator;
+
+    /** 默认身份 header：由 TestAuth.LINMJ 构造，所有 perform 统一带上 */
+    private final HttpHeaders authHeaders = buildAuthHeaders();
+
+    private static HttpHeaders buildAuthHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        TestAuth.LINMJ.accept(headers);
+        return headers;
+    }
+
+    @BeforeEach
+    void auth() {
+        when(authenticator.authenticate("default", "linmj"))
+            .thenReturn(Optional.of(TestAuth.LINMJ_CTX));
+    }
 
     @Test
     void createReturnsConversation() throws Exception {
@@ -48,7 +71,7 @@ class ConversationControllerTest {
             return e;
         });
 
-        mockMvc.perform(post("/api/conversations")
+        mockMvc.perform(post("/api/conversations").headers(authHeaders)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"title\":\"新会话\"}"))
             .andExpect(status().isOk())
@@ -72,7 +95,7 @@ class ConversationControllerTest {
             return e;
         });
 
-        mockMvc.perform(post("/api/conversations")
+        mockMvc.perform(post("/api/conversations").headers(authHeaders)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
             .andExpect(status().isOk());
@@ -91,7 +114,7 @@ class ConversationControllerTest {
                 java.time.Instant.now(), java.time.Instant.now())));
         when(turns.countByConversationId(1L)).thenReturn(3);
 
-        mockMvc.perform(get("/api/conversations"))
+        mockMvc.perform(get("/api/conversations").headers(authHeaders))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].id").value(1))
             .andExpect(jsonPath("$[0].turnCount").value(3));
@@ -109,7 +132,7 @@ class ConversationControllerTest {
             new com.linagent.agent.persistence.Message(1L, 10L, 0, "USER", "问题", null, null, null, null, null, null, java.time.Instant.now()),
             new com.linagent.agent.persistence.Message(2L, 10L, 1, "TEXT", "回答", null, null, null, null, null, null, java.time.Instant.now())));
 
-        mockMvc.perform(get("/api/conversations/1/turns"))
+        mockMvc.perform(get("/api/conversations/1/turns").headers(authHeaders))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].messages[0].msgType").value("USER"))
             .andExpect(jsonPath("$[0].messages[1].msgType").value("TEXT"));
@@ -117,7 +140,7 @@ class ConversationControllerTest {
 
     @Test
     void deleteReturnsNoContent() throws Exception {
-        mockMvc.perform(delete("/api/conversations/1"))
+        mockMvc.perform(delete("/api/conversations/1").headers(authHeaders))
             .andExpect(status().isNoContent());
     }
 
@@ -127,7 +150,7 @@ class ConversationControllerTest {
             new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
                 java.time.Instant.now(), java.time.Instant.now())));
 
-        mockMvc.perform(delete("/api/conversations/1"))
+        mockMvc.perform(delete("/api/conversations/1").headers(authHeaders))
             .andExpect(status().isNoContent());
 
         // checkpoint 级联清理（Errata 3）：按会话 id 清 conv-1 / conv-1-v* 线程，且先于会话行删除
@@ -140,7 +163,7 @@ class ConversationControllerTest {
     void deleteUnknownConversationSkipsCleanup() throws Exception {
         when(conversations.findById(404L)).thenReturn(java.util.Optional.empty());
 
-        mockMvc.perform(delete("/api/conversations/404"))
+        mockMvc.perform(delete("/api/conversations/404").headers(authHeaders))
             .andExpect(status().isNoContent());
 
         org.mockito.Mockito.verify(checkpointCleaner, org.mockito.Mockito.never())

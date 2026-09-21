@@ -365,6 +365,8 @@ class AgentFacadeTest {
         @Override public void deleteAll(Iterable<? extends Conversation> entities) { entities.forEach(this::delete); }
         @Override public void deleteAll() { data.clear(); }
         @Override public List<Conversation> findAllByOrderByUpdatedAtDesc() { return List.copyOf(data); }
+        /** Task 3 声明的多租户查询：实体归属列 Task 4 才补，本 double 尚无字段可过滤，先与全量查询一致（AgentFacadeTest 不触列表查询） */
+        @Override public List<Conversation> findByTenantIdAndUserIdOrderByUpdatedAtDesc(String tenantId, String userId) { return findAllByOrderByUpdatedAtDesc(); }
         @Override public void touch(Long id) {
             findById(id).ifPresent(c ->
                 data.set(data.indexOf(c), new Conversation(c.id(), c.title(), c.threadId(),
