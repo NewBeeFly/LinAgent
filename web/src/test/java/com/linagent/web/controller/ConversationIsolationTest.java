@@ -67,9 +67,10 @@ class ConversationIsolationTest {
         tester.delete().uri("/api/conversations/%d".formatted(linmjConvId))
             .exchange().expectStatus().isNotFound();
 
-        // chat 404 断言依赖 Task 6 的 facade 归属预检，本任务先整块注释，Task 6 Step 5 解开：
-        // tester.post().uri("/api/conversations/%d/chat".formatted(linmjConvId))
-        //     .header("Content-Type", "application/json").bodyValue(Map.of("content", "hi"))
-        //     .exchange().expectStatus().isNotFound();
+        // Task 6：chat 命中 facade 同步预检（defer 外）抛 ConversationAccessDeniedException
+        // → GlobalExceptionHandler 404；请求不会触达模型
+        tester.post().uri("/api/conversations/%d/chat".formatted(linmjConvId))
+            .header("Content-Type", "application/json").bodyValue(Map.of("content", "hi"))
+            .exchange().expectStatus().isNotFound();
     }
 }

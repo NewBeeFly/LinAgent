@@ -7,7 +7,6 @@ import com.alibaba.cloud.ai.graph.skills.registry.filesystem.FileSystemSkillRegi
 import com.linagent.agent.skills.FilteredSkillRegistry;
 import com.linagent.agent.skills.SkillDefinition;
 import com.linagent.agent.skills.SkillManifestScanner;
-import com.linagent.agent.tools.FileTools;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,11 +30,6 @@ public class AgentBeansConfig {
             .datasource(dataSource)
             .createOption(CreateOption.CREATE_NONE)
             .build();
-    }
-
-    @Bean
-    public FileTools fileTools(@Value("${agent.workspace-root:./workspace}") String workspaceRoot) {
-        return new FileTools(ProjectPathResolver.resolveDir(workspaceRoot));
     }
 
     @Bean
