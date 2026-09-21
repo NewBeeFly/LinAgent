@@ -2,6 +2,8 @@
 import { nextTick, onMounted, ref, reactive, watch } from 'vue'
 import { streamSse } from './api/sse'
 import { createConversation, getTurns, listConversations } from './api/rest'
+import { ApiError } from './api/error'
+import { TENANT_ID, USER_ID } from './api/identity'
 import { applySseEvent, failTurn, newTurn, thinkingActive, turnFromRecord } from './turn'
 import type { ChatTurn, TurnRecord } from './types'
 import ThinkingBlock from './components/ThinkingBlock.vue'
@@ -18,6 +20,21 @@ const turns = ref<ChatTurn[]>([])
 const sidebarOpen = ref(false)
 const timelineEl = ref<HTMLElement | null>(null)
 
+const globalError = ref('')
+
+// 401：身份无效——指向 env 配置（无登录可跳，唯一出路）
+const authErrorMessage = () =>
+  `当前身份（${TENANT_ID}/${USER_ID}）未注册或已失效，请检查 VITE_TENANT_ID / VITE_USER_ID 配置`
+
+// 会话不可用：从列表移除并回到欢迎态（activeId 置空）
+const dropConversation = (id: number) => {
+  conversations.value = conversations.value.filter((c) => c.id !== id)
+  if (activeId.value === id) {
+    activeId.value = null
+    turns.value = []
+  }
+}
+
 const newChat = async () => {
   const c = await createConversation()
   await refresh()
@@ -25,17 +42,33 @@ const newChat = async () => {
 }
 
 const refresh = async () => {
-  conversations.value = await listConversations()
+  try {
+    conversations.value = await listConversations()
+  } catch (err) {
+    if (err instanceof ApiError && err.unauthorized) globalError.value = authErrorMessage()
+    else throw err
+  }
 }
 
 const select = async (id: number) => {
   activeId.value = id
   sidebarOpen.value = false
   turns.value = []
-  const history: TurnRecord[] = await getTurns(id)
-  // 回放与实时流式共用 turn.ts 的分区/合并/错误渲染规则
-  turns.value = history.map(turnFromRecord)
-  await scrollToBottom(true)
+  try {
+    const history: TurnRecord[] = await getTurns(id)
+    // 回放与实时流式共用 turn.ts 的分区/合并/错误渲染规则
+    turns.value = history.map(turnFromRecord)
+    await scrollToBottom(true)
+  } catch (err) {
+    if (err instanceof ApiError && err.notFound) {
+      globalError.value = '该会话不存在或无权访问，已自动移除'
+      dropConversation(id)
+    } else if (err instanceof ApiError && err.unauthorized) {
+      globalError.value = authErrorMessage()
+    } else {
+      throw err
+    }
+  }
 }
 
 const send = async () => {
@@ -55,8 +88,17 @@ const send = async () => {
     refresh()
   } catch (err) {
     // 网络失败（fetch reject / HTTP 非 2xx）：收口为 error 并展示错误文本，
-    // 轮次不再卡在 streaming
-    failTurn(turn, err)
+    // 轮次不再卡在 streaming；404/401 走无感分支
+    if (err instanceof ApiError && err.notFound) {
+      failTurn(turn, new Error('该会话已不可用（可能已删除或归属其他用户）'))
+      dropConversation(activeId.value!)
+      await refresh()
+    } else if (err instanceof ApiError && err.unauthorized) {
+      globalError.value = authErrorMessage()
+      failTurn(turn, err)
+    } else {
+      failTurn(turn, err)
+    }
   } finally {
     sending.value = false
   }
@@ -106,6 +148,9 @@ onMounted(async () => {
     </aside>
 
     <main class="chat">
+      <div class="global-error" v-if="globalError" @click="globalError = ''">
+        {{ globalError }}（点击关闭）
+      </div>
       <div class="timeline" ref="timelineEl">
         <!-- 空会话欢迎面板 -->
         <div v-if="turns.length === 0" class="welcome">
@@ -255,6 +300,16 @@ onMounted(async () => {
   padding: 7px 12px;
   font-size: 13px;
   margin: 6px 0;
+}
+
+.global-error {
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(192, 57, 43, 0.08);
+  color: #b03a2e;
+  font-size: 13px;
+  cursor: pointer;
 }
 
 /* ============ 欢迎面板 ============ */
