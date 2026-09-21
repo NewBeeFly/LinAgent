@@ -2,7 +2,7 @@
 import { onMounted, ref, reactive } from 'vue'
 import { streamSse } from './api/sse'
 import { createConversation, getTurns, listConversations } from './api/rest'
-import { applySseEvent, failTurn, newTurn, turnFromRecord } from './turn'
+import { applySseEvent, failTurn, newTurn, thinkingActive, turnFromRecord } from './turn'
 import type { ChatTurn, TurnRecord } from './types'
 import ThinkingBlock from './components/ThinkingBlock.vue'
 import ToolCard from './components/ToolCard.vue'
@@ -96,7 +96,7 @@ onMounted(async () => {
         </div>
         <div v-for="(turn, i) in turns" :key="i" class="turn">
           <MessageBubble role="user" :content="turn.userText" v-if="turn.userText" />
-          <ThinkingBlock :content="turn.thinking" :streaming="turn.status === 'streaming'" v-if="turn.thinking" />
+          <ThinkingBlock :content="turn.thinking" :streaming="thinkingActive(turn)" v-if="turn.thinking" />
           <ToolCard v-for="t in turn.tools" :key="t.callId" :tool="t" />
           <MessageBubble role="assistant" :content="turn.text" v-if="turn.text" />
           <p class="error-line" v-if="turn.errorText">错误：{{ turn.errorText }}</p>

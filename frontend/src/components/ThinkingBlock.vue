@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+
 const props = defineProps<{ content: string; streaming?: boolean }>()
 const open = ref(false)
+
+// streaming 翻转驱动自动开合：思考开始 → 展开（打字机可见）；
+// 思考结束（正文开始/轮次结束，由父级 thinkingActive 判定）→ 自动合上。
+// 中途的手动开合不被打断，直到下一次翻转。
+watch(() => props.streaming, (s) => { open.value = s }, { immediate: true })
 </script>
 
 <template>
