@@ -47,8 +47,8 @@ class WorkspaceResolverTest {
         Files.writeString(tmp.resolve("tenant-a").resolve("shared").resolve("规范.md"), "团队规范");
 
         FileTools tools = new FileTools(personal);
-        assertThat(tools.read_file("shared/规范.md")).isEqualTo("团队规范"); // shared 可达
-        assertThatThrownBy(() -> tools.read_file("../zhangsan/x")) // 兄弟越界
+        assertThat(tools.readFile("shared/规范.md")).isEqualTo("团队规范"); // shared 可达
+        assertThatThrownBy(() -> tools.readFile("../zhangsan/x")) // 兄弟越界
             .isInstanceOf(IllegalArgumentException.class);
     }
 

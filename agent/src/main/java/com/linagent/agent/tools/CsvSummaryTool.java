@@ -20,8 +20,8 @@ public class CsvSummaryTool {
         this.workspaceRoot = workspaceRoot.toAbsolutePath().normalize();
     }
 
-    @Tool(description = "统计 CSV 文件：返回总行数（不含表头）、列数、表头字段列表")
-    public String csv_summary(@ToolParam(description = "相对工作区根的 CSV 文件路径") String path) {
+    @Tool(name = "csv_summary", description = "统计 CSV 文件：返回总行数（不含表头）、列数、表头字段列表")
+    public String csvSummary(@ToolParam(description = "相对工作区根的 CSV 文件路径") String path) {
         Path p = new FileTools(workspaceRoot).resolveSafely(path);
         if (!Files.isRegularFile(p)) {
             throw new IllegalArgumentException("文件不存在: " + path);

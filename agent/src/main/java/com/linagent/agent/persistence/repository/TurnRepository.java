@@ -1,4 +1,6 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.repository;
+
+import com.linagent.agent.persistence.po.Turn;
 
 import org.springframework.data.repository.CrudRepository;
 

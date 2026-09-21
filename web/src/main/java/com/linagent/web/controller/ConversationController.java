@@ -2,11 +2,11 @@ package com.linagent.web.controller;
 
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
-import com.linagent.agent.persistence.CheckpointCleaner;
-import com.linagent.agent.persistence.Conversation;
-import com.linagent.agent.persistence.ConversationRepository;
-import com.linagent.agent.persistence.MessageRepository;
-import com.linagent.agent.persistence.TurnRepository;
+import com.linagent.agent.persistence.support.CheckpointCleaner;
+import com.linagent.agent.persistence.po.Conversation;
+import com.linagent.agent.persistence.repository.ConversationRepository;
+import com.linagent.agent.persistence.repository.MessageRepository;
+import com.linagent.agent.persistence.repository.TurnRepository;
 import com.linagent.web.dto.ConversationResponse;
 import com.linagent.web.dto.CreateConversationRequest;
 import com.linagent.web.dto.TurnResponse;

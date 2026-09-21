@@ -1,4 +1,6 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.repository;
+
+import com.linagent.agent.persistence.po.Message;
 
 import org.springframework.data.jdbc.repository.query.Query;
 import org.springframework.data.repository.CrudRepository;

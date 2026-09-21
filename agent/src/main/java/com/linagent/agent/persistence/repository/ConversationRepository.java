@@ -1,4 +1,6 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.repository;
+
+import com.linagent.agent.persistence.po.Conversation;
 
 import org.springframework.data.jdbc.repository.query.Modifying;
 import org.springframework.data.jdbc.repository.query.Query;

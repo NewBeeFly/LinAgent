@@ -1,6 +1,6 @@
 package com.linagent.web.controller;
 
-import com.linagent.agent.persistence.ConversationAccessDeniedException;
+import com.linagent.agent.persistence.repository.ConversationAccessDeniedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;

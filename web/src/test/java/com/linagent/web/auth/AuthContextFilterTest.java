@@ -30,11 +30,13 @@ class AuthContextFilterTest {
     @Autowired
     WebTestClient webTestClient;
 
+    @MockBean com.linagent.agent.persistence.repository.AppUserRepository appUsers;
+    @MockBean com.linagent.agent.persistence.repository.GraphThreadRepository graphThreads;
     @MockBean RequestAuthenticator authenticator;
-    @MockBean com.linagent.agent.persistence.ConversationRepository conversations;
-    @MockBean com.linagent.agent.persistence.TurnRepository turns;
-    @MockBean com.linagent.agent.persistence.MessageRepository messages;
-    @MockBean com.linagent.agent.persistence.CheckpointCleaner checkpointCleaner;
+    @MockBean com.linagent.agent.persistence.repository.ConversationRepository conversations;
+    @MockBean com.linagent.agent.persistence.repository.TurnRepository turns;
+    @MockBean com.linagent.agent.persistence.repository.MessageRepository messages;
+    @MockBean com.linagent.agent.persistence.support.CheckpointCleaner checkpointCleaner;
     @MockBean com.linagent.agent.facade.AgentFacade agentFacade;
 
     @BeforeEach

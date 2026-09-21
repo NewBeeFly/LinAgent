@@ -10,10 +10,10 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.linagent.agent.facade.AgentFacade;
-import com.linagent.agent.persistence.CheckpointCleaner;
-import com.linagent.agent.persistence.ConversationRepository;
-import com.linagent.agent.persistence.MessageRepository;
-import com.linagent.agent.persistence.TurnRepository;
+import com.linagent.agent.persistence.support.CheckpointCleaner;
+import com.linagent.agent.persistence.repository.ConversationRepository;
+import com.linagent.agent.persistence.repository.MessageRepository;
+import com.linagent.agent.persistence.repository.TurnRepository;
 import com.linagent.web.auth.RequestAuthenticator;
 import com.linagent.web.support.TestAuth;
 
@@ -35,6 +35,8 @@ class ConversationControllerTest {
     @Autowired
     MockMvc mockMvc;
 
+    @MockBean com.linagent.agent.persistence.repository.AppUserRepository appUsers;
+    @MockBean com.linagent.agent.persistence.repository.GraphThreadRepository graphThreads;
     @MockBean AgentFacade agentFacade;
     @MockBean ConversationRepository conversations;
     @MockBean TurnRepository turns;
@@ -64,9 +66,9 @@ class ConversationControllerTest {
         // 两段式落库语义：save 幂等桩——id 为 null 时分配 id（第一次 INSERT），
         // 已有 id 时原样返回（第二次 UPDATE）
         when(conversations.save(any())).thenAnswer(inv -> {
-            com.linagent.agent.persistence.Conversation e = inv.getArgument(0);
+            com.linagent.agent.persistence.po.Conversation e = inv.getArgument(0);
             if (e.id() == null) {
-                return new com.linagent.agent.persistence.Conversation(1L, e.title(), e.threadId(),
+                return new com.linagent.agent.persistence.po.Conversation(1L, e.title(), e.threadId(),
                     e.compactSummary(), e.compactedTurnSeq(), e.tenantId(), e.userId(),
                     e.createdAt(), e.updatedAt());
             }
@@ -89,9 +91,9 @@ class ConversationControllerTest {
     @Test
     void createPersistsThreadIdEqualToConvIdPrefix() throws Exception {
         when(conversations.save(any())).thenAnswer(inv -> {
-            com.linagent.agent.persistence.Conversation e = inv.getArgument(0);
+            com.linagent.agent.persistence.po.Conversation e = inv.getArgument(0);
             if (e.id() == null) {
-                return new com.linagent.agent.persistence.Conversation(1L, e.title(), e.threadId(),
+                return new com.linagent.agent.persistence.po.Conversation(1L, e.title(), e.threadId(),
                     e.compactSummary(), e.compactedTurnSeq(), e.tenantId(), e.userId(),
                     e.createdAt(), e.updatedAt());
             }
@@ -103,8 +105,8 @@ class ConversationControllerTest {
                 .content("{}"))
             .andExpect(status().isOk());
 
-        org.mockito.ArgumentCaptor<com.linagent.agent.persistence.Conversation> captor =
-            org.mockito.ArgumentCaptor.forClass(com.linagent.agent.persistence.Conversation.class);
+        org.mockito.ArgumentCaptor<com.linagent.agent.persistence.po.Conversation> captor =
+            org.mockito.ArgumentCaptor.forClass(com.linagent.agent.persistence.po.Conversation.class);
         verify(conversations, times(2)).save(captor.capture());
         // 第二段：threadId 与会话 id 对齐（spec §3 threadId=conversationId 语义）
         assertThat(captor.getAllValues().get(1).threadId()).isEqualTo("conv-1");
@@ -116,7 +118,7 @@ class ConversationControllerTest {
     @Test
     void listReturnsConversationsWithTurnCount() throws Exception {
         when(conversations.findByTenantIdAndUserIdOrderByUpdatedAtDesc(any(), any())).thenReturn(List.of(
-            new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0, "default", "linmj",
+            new com.linagent.agent.persistence.po.Conversation(1L, "会话A", "conv-1", null, 0, "default", "linmj",
                 java.time.Instant.now(), java.time.Instant.now())));
         when(turns.countByConversationId(1L)).thenReturn(3);
 
@@ -130,11 +132,11 @@ class ConversationControllerTest {
     void turnsReplayReturnsNestedMessages() throws Exception {
         // requireOwned 为接口 default 方法，Mockito mock 下是 no-op——预检直接放行，无需打桩
         when(turns.findByConversationIdOrderBySeqAsc(1L)).thenReturn(List.of(
-            new com.linagent.agent.persistence.Turn(10L, 1L, 1, "COMPLETED", "STOP", null,
+            new com.linagent.agent.persistence.po.Turn(10L, 1L, 1, "COMPLETED", "STOP", null,
                 java.time.Instant.now(), java.time.Instant.now())));
         when(messages.findByTurnIdOrderBySeq(10L)).thenReturn(List.of(
-            new com.linagent.agent.persistence.Message(1L, 10L, 0, "USER", "问题", null, null, null, null, null, null, java.time.Instant.now()),
-            new com.linagent.agent.persistence.Message(2L, 10L, 1, "TEXT", "回答", null, null, null, null, null, null, java.time.Instant.now())));
+            new com.linagent.agent.persistence.po.Message(1L, 10L, 0, "USER", "问题", null, null, null, null, null, null, java.time.Instant.now()),
+            new com.linagent.agent.persistence.po.Message(2L, 10L, 1, "TEXT", "回答", null, null, null, null, null, null, java.time.Instant.now())));
 
         mockMvc.perform(get("/api/conversations/1/turns").headers(authHeaders))
             .andExpect(status().isOk())
@@ -164,7 +166,7 @@ class ConversationControllerTest {
     void deleteUnknownConversationReturns404AndSkipsCleanup() throws Exception {
         // default 方法在 mock 上不执行真实实现，归属预检的未命中路径需直接对 requireOwned 抛异常
         org.mockito.Mockito.doThrow(
-                new com.linagent.agent.persistence.ConversationAccessDeniedException(404L))
+                new com.linagent.agent.persistence.repository.ConversationAccessDeniedException(404L))
             .when(conversations).requireOwned(eq(404L), any(), any());
 
         mockMvc.perform(delete("/api/conversations/404").headers(authHeaders))

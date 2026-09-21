@@ -76,6 +76,25 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 - `mvn -pl web spring-boot:run` fork 出的 JVM **工作目录是 web 模块目录**：`agent.skills-root`/`agent.workspace-root` 这类相对路径配置裸解析会落到 `web/skills`（不存在）导致 0 技能加载（0 技能时模型会幻觉编造技能名）。必须经 `ProjectPathResolver.resolveDir`（cwd → 父目录上溯一级）解析，直接 `Path.of(相对路径)` 是回归。
 - @WebMvcTest 切片会自动装配 Filter 类型 Bean：AuthContextFilter 落地后所有 @WebMvcTest 必须 @MockBean RequestAuthenticator 并打桩（返回 TestAuth.LINMJ_CTX），否则 401/上下文失败。
 
+## 代码结构与风格约束（新增代码必读，评审对照）
+
+### 数据访问（SQL 只许两处存在：@Query 注解与 Flyway 文件）
+- 优先级：**派生查询**（findByXxx）→ **@Query 注解**（派生写不出/启动期解析坑时）→ 禁止 JdbcTemplate 裸写字符串 SQL；DDL 一律只在 Flyway 迁移文件
+- PO 一律 record + `@Table`，放 `persistence/po/`；仓库接口放 `persistence/repository/`；JdbcConverterConfig/CheckpointCleaner 等运维件放 `persistence/support/`
+- 只读无 @Id 的复合键表（app_user）或外部表投影（graphthread）：用**查询型仓库接口**（`extends Repository<PO, String>` + @Query），不继承 CrudRepository；仓库接口必须挂一个 PersistentEntity 载体 PO（`Repository<Void,…>` 会启动期崩）
+- 实证坑：SD JDBC 3.5.1 派生查询在实体无对应字段时**启动期** QueryCreationException（不是运行期）；PG 对同一命名参数在 CONCAT 里二次出现报 "could not determine data type"（拆双参数解决）
+- @WebMvcTest 切片会实例化 `@EnableJdbcRepositories` 注册的**所有**仓库接口：新增仓库接口后，各切片测试必须补对应 @MockBean
+
+### 命名
+- Java 方法/变量一律驼峰；模型侧工具名保持 snake_case 稳定契约——用 `@Tool(name = "read_file")` 别名 + 驼峰方法名（`readFile`），**不要**给 Java 方法起下划线名
+- 工具名（read_file/write_file/list_dir/csv_summary/read_skill）被 system prompt、技能文档、SkillsSmokeTest 断言引用，改名=破坏外部契约，只能靠别名承接
+- 列名蛇形 ↔ 字段驼峰由 SD JDBC 默认命名策略自动映射（Conversation.compactSummary ↔ compact_summary 已实证）
+
+### 判空政策
+- **边界判空必要**：外部输入（header/请求体）、协议可空尾包（StepFun usage 空包）、JSONB/可空列 metadata、`@RequestBody(required=false)`——这些是实证过的坑，不许"优化"掉
+- **内部不变量不判空**：构造函数刚赋值的字段、record 自带不可变约定——多余判空视为噪音
+- 工具/中间层重复防御（同一数据上游已校验）不叠加
+
 ## 前端两个易踩点
 
 - `send()` 的 turn 必须 `reactive(newTurn(text))` 包裹——raw 对象的增量修改不触发 Vue 响应式，会导致整轮内容等流结束一次性出现（修过一次，有回归测试）。

@@ -1,4 +1,4 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.support;
 
 import org.postgresql.util.PGobject;
 import org.springframework.context.annotation.Bean;

@@ -1,7 +1,7 @@
 package com.linagent.web.dto;
 
-import com.linagent.agent.persistence.Message;
-import com.linagent.agent.persistence.Turn;
+import com.linagent.agent.persistence.po.Message;
+import com.linagent.agent.persistence.po.Turn;
 
 import java.util.List;
 

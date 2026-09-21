@@ -1,7 +1,7 @@
 package com.linagent.web.controller;
 
-import com.linagent.agent.persistence.AppUser;
-import com.linagent.agent.persistence.AppUserRepository;
+import com.linagent.agent.persistence.po.AppUser;
+import com.linagent.agent.persistence.repository.AppUserRepository;
 import com.linagent.web.auth.RequestAuthenticator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,14 +26,15 @@ class IdentityControllerTest {
     @Autowired
     WebTestClient webTestClient;
 
+    @MockBean com.linagent.agent.persistence.repository.GraphThreadRepository graphThreads;
     @MockBean AppUserRepository users;
     /** AuthContextFilter 为 Filter Bean 随切片装配，其依赖需补桩（豁免路径不会调用它） */
     @MockBean RequestAuthenticator authenticator;
     /** @EnableJdbcRepositories 直注在应用类上，切片仍创建仓储 Bean——与兄弟切片测试一致全部打桩 */
-    @MockBean com.linagent.agent.persistence.ConversationRepository conversations;
-    @MockBean com.linagent.agent.persistence.TurnRepository turns;
-    @MockBean com.linagent.agent.persistence.MessageRepository messages;
-    @MockBean com.linagent.agent.persistence.CheckpointCleaner checkpointCleaner;
+    @MockBean com.linagent.agent.persistence.repository.ConversationRepository conversations;
+    @MockBean com.linagent.agent.persistence.repository.TurnRepository turns;
+    @MockBean com.linagent.agent.persistence.repository.MessageRepository messages;
+    @MockBean com.linagent.agent.persistence.support.CheckpointCleaner checkpointCleaner;
     @MockBean com.linagent.agent.facade.AgentFacade agentFacade;
 
     @Test

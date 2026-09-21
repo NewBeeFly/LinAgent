@@ -1,4 +1,4 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.po;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Table;

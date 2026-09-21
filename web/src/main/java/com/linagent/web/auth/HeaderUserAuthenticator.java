@@ -1,7 +1,7 @@
 package com.linagent.web.auth;
 
 import com.linagent.agent.context.AuthContext;
-import com.linagent.agent.persistence.AppUserRepository;
+import com.linagent.agent.persistence.repository.AppUserRepository;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;

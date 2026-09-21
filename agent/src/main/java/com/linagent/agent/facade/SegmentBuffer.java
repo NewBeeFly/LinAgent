@@ -1,7 +1,7 @@
 package com.linagent.agent.facade;
 
-import com.linagent.agent.persistence.Message;
-import com.linagent.agent.persistence.MessageRepository;
+import com.linagent.agent.persistence.po.Message;
+import com.linagent.agent.persistence.repository.MessageRepository;
 
 import java.util.concurrent.atomic.AtomicInteger;
 

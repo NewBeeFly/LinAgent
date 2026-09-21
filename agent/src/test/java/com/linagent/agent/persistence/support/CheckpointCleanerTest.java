@@ -1,4 +1,8 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.support;
+import com.linagent.agent.persistence.po.Conversation;
+import com.linagent.agent.persistence.repository.ConversationRepository;
+
+import com.linagent.agent.persistence.repository.GraphThreadRepository;
 
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.checkpoint.Checkpoint;
