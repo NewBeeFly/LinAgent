@@ -171,15 +171,6 @@ onMounted(async () => {
         <span class="mark"></span>
         <span class="name">LinAgent</span>
       </div>
-      <select v-if="identityOptions.length" class="identity" :value="identityKey"
-              aria-label="切换身份"
-              @change="switchIdentity(($event.target as HTMLSelectElement).value)">
-        <optgroup v-for="t in identityOptions" :key="t.tenantId" :label="t.tenantId">
-          <option v-for="u in t.users" :key="u.userId" :value="`${t.tenantId}/${u.userId}`">
-            {{ u.name }}（{{ u.userId }}）
-          </option>
-        </optgroup>
-      </select>
       <button class="new" @click="newChat">新对话</button>
       <div class="conv-list">
         <div v-for="c in conversations" :key="c.id"
@@ -191,6 +182,16 @@ onMounted(async () => {
     </aside>
 
     <main class="chat">
+      <!-- 身份切换器：右上角常驻（fixed，与移动端 ☰ 对角），下拉弹层不再遮挡侧栏按钮 -->
+      <select v-if="identityOptions.length" class="identity" :value="identityKey"
+              aria-label="切换身份"
+              @change="switchIdentity(($event.target as HTMLSelectElement).value)">
+        <optgroup v-for="t in identityOptions" :key="t.tenantId" :label="t.tenantId">
+          <option v-for="u in t.users" :key="u.userId" :value="`${t.tenantId}/${u.userId}`">
+            {{ u.name }}（{{ u.userId }}）
+          </option>
+        </optgroup>
+      </select>
       <div class="global-error" v-if="globalError" @click="globalError = ''">
         {{ globalError }}（点击关闭）
       </div>
@@ -267,14 +268,19 @@ onMounted(async () => {
   color: var(--ink);
 }
 .identity {
-  border: 1px solid var(--pine);
-  background: transparent;
-  color: var(--pine);
-  border-radius: var(--radius-md);
-  padding: 7px 8px;
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 30;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  border-radius: var(--radius-sm);
+  height: 36px;
+  padding: 0 10px;
   font-size: 13px;
   cursor: pointer;
-  width: 100%;
+  max-width: 40vw;
 }
 
 .new {
