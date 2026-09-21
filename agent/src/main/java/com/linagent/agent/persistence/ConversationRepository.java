@@ -26,4 +26,10 @@ public interface ConversationRepository extends CrudRepository<Conversation, Lon
     @Modifying
     @Query("UPDATE conversation SET updated_at = now() WHERE id = :id")
     void touch(Long id);
+
+    /** 归属预检统一出口：未命中（不存在或非属主）抛 404 语义异常，调用方一行收敛 */
+    default void requireOwned(Long id, String tenantId, String userId) {
+        findByIdAndTenantIdAndUserId(id, tenantId, userId)
+            .orElseThrow(() -> new ConversationAccessDeniedException(id));
+    }
 }

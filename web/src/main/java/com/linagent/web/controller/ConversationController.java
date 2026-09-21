@@ -4,7 +4,6 @@ import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.agent.persistence.CheckpointCleaner;
 import com.linagent.agent.persistence.Conversation;
-import com.linagent.agent.persistence.ConversationAccessDeniedException;
 import com.linagent.agent.persistence.ConversationRepository;
 import com.linagent.agent.persistence.MessageRepository;
 import com.linagent.agent.persistence.TurnRepository;
@@ -65,8 +64,7 @@ public class ConversationController {
     @GetMapping("/{id}/turns")
     public List<TurnResponse> turns(@PathVariable Long id) {
         AuthContext ctx = AuthContextHolder.require();
-        conversations.findByIdAndTenantIdAndUserId(id, ctx.tenantId(), ctx.userId())
-            .orElseThrow(() -> new ConversationAccessDeniedException(id));
+        conversations.requireOwned(id, ctx.tenantId(), ctx.userId());
         return turns.findByConversationIdOrderBySeqAsc(id).stream()
             .map(t -> TurnResponse.from(t, messages.findByTurnIdOrderBySeq(t.id())))
             .toList();
@@ -80,8 +78,7 @@ public class ConversationController {
         // ON DELETE CASCADE 承担；checkpoint（graphthread/graphcheckpoint）由
         // CheckpointCleaner 按 threadId 模式清理。先清 checkpoint 再删会话行：
         // 中途失败时重试安全（会话仍在，幂等清理）。
-        conversations.findByIdAndTenantIdAndUserId(id, ctx.tenantId(), ctx.userId())
-            .orElseThrow(() -> new ConversationAccessDeniedException(id));
+        conversations.requireOwned(id, ctx.tenantId(), ctx.userId());
         checkpointCleaner.deleteByConversationId(id);
         conversations.deleteById(id);
     }

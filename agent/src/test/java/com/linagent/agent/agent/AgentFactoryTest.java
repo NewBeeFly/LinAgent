@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AgentFactoryTest {
 
     /** agent 模块无 TestAuth（web 测试设施），身份常量在本文件内自持 */
-    private static final AuthContext CTX = new AuthContext("default", "linmj", "林同学");
+    private static final AuthContext CTX = new AuthContext("default", "linmj");
 
     @TempDir
     Path tempDir;
@@ -50,9 +50,9 @@ class AgentFactoryTest {
     void createProvisionsPersonalWorkspacePerIdentity() throws Exception {
         AgentFactory factory = newFactory();
 
-        factory.create(new AuthContext("t", "linmj", "n"),
+        factory.create(new AuthContext("t", "linmj"),
             Sinks.many().unicast().onBackpressureBuffer(), new AtomicReference<>());
-        factory.create(new AuthContext("t", "tester", "n"),
+        factory.create(new AuthContext("t", "tester"),
             Sinks.many().unicast().onBackpressureBuffer(), new AtomicReference<>());
 
         assertThat(Files.isDirectory(workspaceTmp.resolve("t/users/linmj"))).isTrue();

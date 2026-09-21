@@ -37,3 +37,7 @@ export const identityHeaders = (): Record<string, string> => ({
   'x-tenant-id': current.tenantId,
   'x-user-id': current.userId,
 })
+
+/** 所有 /api 请求的统一出口：注入当前身份 header（新调用点禁止直接 fetch /api） */
+export const authedFetch = (url: string, init?: RequestInit): Promise<Response> =>
+  fetch(url, { ...init, headers: { ...identityHeaders(), ...init?.headers } })

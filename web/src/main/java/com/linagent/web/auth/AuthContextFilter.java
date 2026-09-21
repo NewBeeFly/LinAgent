@@ -1,7 +1,9 @@
 package com.linagent.web.auth;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
+import com.linagent.web.controller.IdentityController;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,6 +16,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -27,19 +30,20 @@ public class AuthContextFilter extends OncePerRequestFilter {
 
     static final String TENANT_HEADER = "x-tenant-id";
     static final String USER_HEADER = "x-user-id";
-    /** 身份候选名单路径：免鉴权（切换器需在任何身份生效前拿到候选）。登录体系上线时收紧 */
-    static final String IDENTITY_OPTIONS_PATH = "/api/identity/options";
 
     private final RequestAuthenticator authenticator;
+    private final ObjectMapper objectMapper;
 
-    public AuthContextFilter(RequestAuthenticator authenticator) {
+    public AuthContextFilter(RequestAuthenticator authenticator, ObjectMapper objectMapper) {
         this.authenticator = authenticator;
+        this.objectMapper = objectMapper;
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String uri = request.getRequestURI();
-        if (IDENTITY_OPTIONS_PATH.equals(uri)) {
+        // 身份候选名单免鉴权（切换器需在任何身份生效前拿到候选）。登录体系上线时收紧
+        if (IdentityController.PATH.equals(uri)) {
             return true;
         }
         return !uri.startsWith("/api");
@@ -85,6 +89,7 @@ public class AuthContextFilter extends OncePerRequestFilter {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.getWriter().write("{\"message\": \"" + message + "\"}");
+        // 与 GlobalExceptionHandler 同一序列化出口（Map.of 形状一致，且 header 值含引号等字符时合法转义）
+        response.getWriter().write(objectMapper.writeValueAsString(Map.of("message", message)));
     }
 }

@@ -18,6 +18,9 @@ import java.util.Map;
 @RestController
 public class IdentityController {
 
+    /** 免鉴权路径唯一来源：AuthContextFilter 的豁免引用此常量，改路径只动这里 */
+    public static final String PATH = "/api/identity/options";
+
     private final AppUserRepository users;
 
     public IdentityController(AppUserRepository users) {
@@ -30,7 +33,7 @@ public class IdentityController {
     public record TenantOptions(String tenantId, List<UserOption> users) {
     }
 
-    @GetMapping("/api/identity/options")
+    @GetMapping(PATH)
     public List<TenantOptions> options() {
         Map<String, List<UserOption>> grouped = new LinkedHashMap<>();
         for (AppUser u : users.findAll()) {

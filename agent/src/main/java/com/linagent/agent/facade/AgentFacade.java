@@ -10,7 +10,6 @@ import com.linagent.agent.compaction.CompactionService;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.agent.persistence.Conversation;
-import com.linagent.agent.persistence.ConversationAccessDeniedException;
 import com.linagent.agent.persistence.ConversationRepository;
 import com.linagent.agent.persistence.Message;
 import com.linagent.agent.persistence.MessageRepository;
@@ -69,8 +68,7 @@ public class AgentFacade {
         // 届时 Filter finally 已清理且线程不同，defer 内读 Holder 必炸。
         AuthContext ctx = AuthContextHolder.require();
         // 归属预检同步抛出：HTTP 404（GlobalExceptionHandler 映射）先于 SSE 建流
-        conversations.findByIdAndTenantIdAndUserId(conversationId, ctx.tenantId(), ctx.userId())
-            .orElseThrow(() -> new ConversationAccessDeniedException(conversationId));
+        conversations.requireOwned(conversationId, ctx.tenantId(), ctx.userId());
         return Flux.defer(() -> {
             // 压缩检查在读取会话之前（UserMessage 不进本次压缩摘要），超阈值时切换新 threadId
             compactionService.compactIfNeeded(conversationId);
