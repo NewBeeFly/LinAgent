@@ -1,3 +1,5 @@
+import { ApiError } from './error'
+import { identityHeaders } from './identity'
 import type { SseEvent } from '../types'
 
 export function parseSseBlock(block: string): SseEvent | null {
@@ -23,11 +25,11 @@ export async function streamSse(
 ): Promise<void> {
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...identityHeaders() },
     body: JSON.stringify(body),
   })
   if (!resp.ok || !resp.body) {
-    throw new Error(`HTTP ${resp.status}`)
+    throw await ApiError.from(resp)
   }
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
