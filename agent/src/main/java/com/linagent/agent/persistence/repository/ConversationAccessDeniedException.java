@@ -1,4 +1,4 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.repository;
 
 /** 会话不存在或不属于当前身份（web 层映射 404，不泄漏存在性） */
 public class ConversationAccessDeniedException extends RuntimeException {

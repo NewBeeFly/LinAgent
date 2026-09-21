@@ -13,9 +13,9 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 
 import com.linagent.agent.facade.AgentFacade;
-import com.linagent.agent.persistence.ConversationRepository;
-import com.linagent.agent.persistence.MessageRepository;
-import com.linagent.agent.persistence.TurnRepository;
+import com.linagent.agent.persistence.repository.ConversationRepository;
+import com.linagent.agent.persistence.repository.MessageRepository;
+import com.linagent.agent.persistence.repository.TurnRepository;
 import com.linagent.web.auth.RequestAuthenticator;
 import com.linagent.web.stream.SseEventMapper;
 import com.linagent.web.support.TestAuth;
@@ -38,6 +38,8 @@ class ChatControllerSseTest {
     @Autowired
     WebTestClient webTestClient;
 
+    @MockBean com.linagent.agent.persistence.repository.AppUserRepository appUsers;
+    @MockBean com.linagent.agent.persistence.repository.GraphThreadRepository graphThreads;
     @MockBean AgentFacade agentFacade;
     @MockBean ConversationRepository conversations;
     @MockBean TurnRepository turns;

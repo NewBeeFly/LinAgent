@@ -1,4 +1,4 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.po;
 
 import java.time.Instant;
 

@@ -1,9 +1,10 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.repository;
+
+import com.linagent.agent.persistence.po.AppUser;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.data.jdbc.DataJdbcTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -17,7 +18,6 @@ import static org.assertj.core.api.Assertions.assertThat;
     "spring.sql.init.mode=always",
     "spring.sql.init.schema-locations=classpath:db/migration/V4__multi_tenant.sql"
 })
-@Import(AppUserRepository.class)
 @Testcontainers
 class AppUserRepositoryTest {
 

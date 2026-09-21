@@ -1,4 +1,9 @@
-package com.linagent.agent.persistence;
+package com.linagent.agent.persistence.repository;
+
+import com.linagent.agent.persistence.po.Conversation;
+import com.linagent.agent.persistence.po.Turn;
+import com.linagent.agent.persistence.po.Message;
+import com.linagent.agent.persistence.support.JdbcConverterConfig;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

@@ -26,12 +26,12 @@ class FileToolsTest {
     @Test
     void readFileReturnsContent() throws IOException {
         Files.writeString(tempDir.resolve("a.txt"), "hello");
-        assertThat(fileTools.read_file("a.txt")).isEqualTo("hello");
+        assertThat(fileTools.readFile("a.txt")).isEqualTo("hello");
     }
 
     @Test
     void writeFileCreatesFileAndParentDirs() {
-        fileTools.write_file("sub/b.txt", "内容");
+        fileTools.writeFile("sub/b.txt", "内容");
         assertThat(tempDir.resolve("sub/b.txt")).hasContent("内容");
     }
 
@@ -39,25 +39,25 @@ class FileToolsTest {
     void listDirReturnsEntryNames() throws IOException {
         Files.writeString(tempDir.resolve("a.txt"), "x");
         Files.createDirectory(tempDir.resolve("d"));
-        assertThat(fileTools.list_dir(".")).contains("a.txt", "d/");
+        assertThat(fileTools.listDir(".")).contains("a.txt", "d/");
     }
 
     @Test
     void pathEscapeIsRejected() {
-        assertThatThrownBy(() -> fileTools.read_file("../outside.txt"))
+        assertThatThrownBy(() -> fileTools.readFile("../outside.txt"))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("路径越界");
     }
 
     @Test
     void absolutePathOutsideWorkspaceIsRejected() {
-        assertThatThrownBy(() -> fileTools.read_file("/etc/passwd"))
+        assertThatThrownBy(() -> fileTools.readFile("/etc/passwd"))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void missingFileIsRejected() {
-        assertThatThrownBy(() -> fileTools.read_file("nope.txt"))
+        assertThatThrownBy(() -> fileTools.readFile("nope.txt"))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("不存在");
     }

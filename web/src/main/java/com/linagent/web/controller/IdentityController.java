@@ -1,7 +1,7 @@
 package com.linagent.web.controller;
 
-import com.linagent.agent.persistence.AppUser;
-import com.linagent.agent.persistence.AppUserRepository;
+import com.linagent.agent.persistence.po.AppUser;
+import com.linagent.agent.persistence.repository.AppUserRepository;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 

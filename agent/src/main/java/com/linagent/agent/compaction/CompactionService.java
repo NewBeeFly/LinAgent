@@ -1,11 +1,11 @@
 package com.linagent.agent.compaction;
 
-import com.linagent.agent.persistence.Conversation;
-import com.linagent.agent.persistence.ConversationRepository;
-import com.linagent.agent.persistence.Message;
-import com.linagent.agent.persistence.MessageRepository;
-import com.linagent.agent.persistence.Turn;
-import com.linagent.agent.persistence.TurnRepository;
+import com.linagent.agent.persistence.po.Conversation;
+import com.linagent.agent.persistence.repository.ConversationRepository;
+import com.linagent.agent.persistence.po.Message;
+import com.linagent.agent.persistence.repository.MessageRepository;
+import com.linagent.agent.persistence.po.Turn;
+import com.linagent.agent.persistence.repository.TurnRepository;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
