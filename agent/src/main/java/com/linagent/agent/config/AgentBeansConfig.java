@@ -35,17 +35,18 @@ public class AgentBeansConfig {
 
     @Bean
     public FileTools fileTools(@Value("${agent.workspace-root:./workspace}") String workspaceRoot) {
-        return new FileTools(Path.of(workspaceRoot));
+        return new FileTools(ProjectPathResolver.resolveDir(workspaceRoot));
     }
 
     @Bean
     public FilteredSkillRegistry progressiveSkillRegistry(
             SkillManifestScanner scanner,
             @Value("${agent.skills-root:./skills}") String skillsRoot) {
+        Path skillsDir = ProjectPathResolver.resolveDir(skillsRoot);
         FileSystemSkillRegistry inner = FileSystemSkillRegistry.builder()
-            .projectSkillsDirectory(Path.of(skillsRoot).toAbsolutePath().toString())
+            .projectSkillsDirectory(skillsDir.toAbsolutePath().toString())
             .build();
-        Set<String> residentNames = Set.copyOf(scanner.scan(Path.of(skillsRoot)).stream()
+        Set<String> residentNames = Set.copyOf(scanner.scan(skillsDir).stream()
             .filter(SkillDefinition::resident)
             .map(SkillDefinition::name)
             .toList());

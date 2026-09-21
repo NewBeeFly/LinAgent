@@ -7,6 +7,7 @@ import com.alibaba.cloud.ai.graph.agent.interceptor.Interceptor;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ToolInterceptor;
 import com.alibaba.cloud.ai.graph.agent.tools.ShellTool2;
 import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
+import com.linagent.agent.config.ProjectPathResolver;
 import com.linagent.agent.skills.FilteredSkillRegistry;
 import com.linagent.agent.skills.ResidentPromptBuilder;
 import com.linagent.agent.stream.ThinkingExtractor;
@@ -47,7 +48,7 @@ public class AgentFactory {
         this.skillRegistry = skillRegistry;
         this.residentPromptBuilder = residentPromptBuilder;
         this.checkpointSaver = checkpointSaver;
-        this.workspaceRoot = workspaceRoot;
+        this.workspaceRoot = ProjectPathResolver.resolveDir(workspaceRoot).toString();
     }
 
     /** ReactAgent 不暴露 systemPrompt 读取口（仅 instruction()），装配产物随 handle 携带 */
