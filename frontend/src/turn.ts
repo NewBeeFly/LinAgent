@@ -28,6 +28,14 @@ export function failTurn(turn: ChatTurn, err: unknown): void {
   turn.errorText = err instanceof Error ? err.message : String(err)
 }
 
+/**
+ * 思考折叠块的展开态：思考进行中（轮次仍在流式且正文未开始）默认展开，
+ * 正文开始出现或轮次结束时自动合上（用户仍可手动开合）。
+ */
+export function thinkingActive(turn: ChatTurn): boolean {
+  return turn.status === 'streaming' && !turn.text
+}
+
 /** 历史回放：一条轮记录 → 前端轮次（ERROR → errorText，SUMMARY 跳过） */
 export function turnFromRecord(record: TurnRecord): ChatTurn {
   const turn = newTurn('', 'done')

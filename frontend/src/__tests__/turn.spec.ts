@@ -123,3 +123,29 @@ describe('响应式触发（回归：流式增量必须驱动重渲染）', () =
     expect(toolCount.value).toBe(1)
   })
 })
+
+describe('thinkingActive（思考折叠块展开态）', () => {
+  it('思考中（流式且无正文）为 true——默认展开', async () => {
+    const { thinkingActive } = await import('../turn')
+    const turn = newTurn('你好')
+    applySseEvent(turn, { event: 'thinking_delta', data: { content: '思' } })
+    expect(thinkingActive(turn)).toBe(true)
+  })
+
+  it('正文开始即 false——自动合上', async () => {
+    const { thinkingActive } = await import('../turn')
+    const turn = newTurn('你好')
+    applySseEvent(turn, { event: 'thinking_delta', data: { content: '思' } })
+    applySseEvent(turn, { event: 'message_delta', data: { content: '答' } })
+    expect(thinkingActive(turn)).toBe(false)
+  })
+
+  it('轮次结束为 false（含 error 路径）', async () => {
+    const { thinkingActive } = await import('../turn')
+    const done = newTurn('你好', 'done')
+    expect(thinkingActive(done)).toBe(false)
+    const failed = newTurn('你好')
+    applySseEvent(failed, { event: 'error', data: { code: 'X' } })
+    expect(thinkingActive(failed)).toBe(false)
+  })
+})
