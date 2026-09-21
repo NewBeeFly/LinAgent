@@ -19,6 +19,6 @@ public class HeaderUserAuthenticator implements RequestAuthenticator {
     @Override
     public Optional<AuthContext> authenticate(String tenantId, String userId) {
         return users.findByTenantIdAndUserId(tenantId, userId)
-            .map(u -> new AuthContext(u.tenantId(), u.userId(), u.name()));
+            .map(u -> new AuthContext(u.tenantId(), u.userId()));
     }
 }

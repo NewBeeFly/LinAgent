@@ -29,14 +29,6 @@ public class WorkspaceResolver {
         this.baseRoot = ProjectPathResolver.resolveDir(workspaceRoot);
     }
 
-    public Path baseRoot() {
-        return baseRoot;
-    }
-
-    public Path sharedRoot(String tenantId) {
-        return baseRoot.resolve(requireSegment(tenantId)).resolve("shared");
-    }
-
     /** 个人根（含幂等 provision：shared 目录、个人目录、shared 相对符号链接） */
     public Path personalRoot(String tenantId, String userId) {
         Path tenantDir = baseRoot.resolve(requireSegment(tenantId));

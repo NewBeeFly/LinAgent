@@ -128,10 +128,7 @@ class ConversationControllerTest {
 
     @Test
     void turnsReplayReturnsNestedMessages() throws Exception {
-        when(conversations.findByIdAndTenantIdAndUserId(eq(1L), any(), any()))
-            .thenReturn(java.util.Optional.of(
-                new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
-                    "default", "linmj", java.time.Instant.now(), java.time.Instant.now())));
+        // requireOwned 为接口 default 方法，Mockito mock 下是 no-op——预检直接放行，无需打桩
         when(turns.findByConversationIdOrderBySeqAsc(1L)).thenReturn(List.of(
             new com.linagent.agent.persistence.Turn(10L, 1L, 1, "COMPLETED", "STOP", null,
                 java.time.Instant.now(), java.time.Instant.now())));
@@ -147,22 +144,12 @@ class ConversationControllerTest {
 
     @Test
     void deleteReturnsNoContent() throws Exception {
-        when(conversations.findByIdAndTenantIdAndUserId(eq(1L), any(), any()))
-            .thenReturn(java.util.Optional.of(
-                new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
-                    "default", "linmj", java.time.Instant.now(), java.time.Instant.now())));
-
         mockMvc.perform(delete("/api/conversations/1").headers(authHeaders))
             .andExpect(status().isNoContent());
     }
 
     @Test
     void deleteCascadesCheckpointCleanupThenRemovesConversation() throws Exception {
-        when(conversations.findByIdAndTenantIdAndUserId(eq(1L), any(), any()))
-            .thenReturn(java.util.Optional.of(
-                new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
-                    "default", "linmj", java.time.Instant.now(), java.time.Instant.now())));
-
         mockMvc.perform(delete("/api/conversations/1").headers(authHeaders))
             .andExpect(status().isNoContent());
 
@@ -175,8 +162,10 @@ class ConversationControllerTest {
     /** 非属主/不存在统一 404（多租户 v0.2：不泄漏存在性），且不触发级联清理 */
     @Test
     void deleteUnknownConversationReturns404AndSkipsCleanup() throws Exception {
-        when(conversations.findByIdAndTenantIdAndUserId(eq(404L), any(), any()))
-            .thenReturn(java.util.Optional.empty());
+        // default 方法在 mock 上不执行真实实现，归属预检的未命中路径需直接对 requireOwned 抛异常
+        org.mockito.Mockito.doThrow(
+                new com.linagent.agent.persistence.ConversationAccessDeniedException(404L))
+            .when(conversations).requireOwned(eq(404L), any(), any());
 
         mockMvc.perform(delete("/api/conversations/404").headers(authHeaders))
             .andExpect(status().isNotFound());

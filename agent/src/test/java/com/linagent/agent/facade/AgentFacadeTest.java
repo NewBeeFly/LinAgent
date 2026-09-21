@@ -84,7 +84,7 @@ class AgentFacadeTest {
         // ThreadLocal 边界运输：facade.chat() 在 defer 外 require()——测试线程即调用线程，
         // 须先 set；本测试全部会话桩归属 ("default","linmj")，与 InMemory double 的
         // findByIdAndTenantIdAndUserId 真实过滤匹配（归属打桩由此成立）
-        AuthContextHolder.set(new AuthContext("default", "linmj", "林同学"));
+        AuthContextHolder.set(new AuthContext("default", "linmj"));
     }
 
     @AfterEach

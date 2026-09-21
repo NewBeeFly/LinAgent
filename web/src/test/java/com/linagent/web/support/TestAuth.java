@@ -18,7 +18,7 @@ public final class TestAuth {
         h.add("x-user-id", "tester");
     };
 
-    public static final AuthContext LINMJ_CTX = new AuthContext("default", "linmj", "林同学");
+    public static final AuthContext LINMJ_CTX = new AuthContext("default", "linmj");
 
     private TestAuth() {
     }

@@ -23,6 +23,9 @@ const timelineEl = ref<HTMLElement | null>(null)
 
 const globalError = ref('')
 
+/** 会话不可用的统一文案（turn 收尾与全局横幅共用，改文案只动这里） */
+const CONV_UNAVAILABLE = '该会话已不可用（可能已删除或归属其他用户）'
+
 // 身份切换器：候选来自 /api/identity/options（免鉴权）；拉取失败隐藏切换器不影响使用
 const identityOptions = ref<TenantIdentityOptions[]>([])
 const identityKey = ref(`${currentIdentity().tenantId}/${currentIdentity().userId}`)
@@ -31,6 +34,15 @@ const identityKey = ref(`${currentIdentity().tenantId}/${currentIdentity().userI
 const authErrorMessage = () => {
   const cur = currentIdentity()
   return `当前身份（${cur.tenantId}/${cur.userId}）未注册或已失效，请切换身份或检查 VITE_TENANT_ID / VITE_USER_ID 配置`
+}
+
+// 401 统一收口：命中时置全局横幅并返回 true，调用方按需 rethrow/收尾轮次
+const authFailed = (err: unknown): boolean => {
+  if (err instanceof ApiError && err.unauthorized) {
+    globalError.value = authErrorMessage()
+    return true
+  }
+  return false
 }
 
 // 切换身份：写记忆、清视图状态、按新身份重拉会话列表
@@ -61,8 +73,7 @@ const newChat = async () => {
     await refresh()
     await select(c.id)
   } catch (err) {
-    if (err instanceof ApiError && err.unauthorized) globalError.value = authErrorMessage()
-    else throw err
+    if (!authFailed(err)) throw err
   }
 }
 
@@ -70,8 +81,7 @@ const refresh = async () => {
   try {
     conversations.value = await listConversations()
   } catch (err) {
-    if (err instanceof ApiError && err.unauthorized) globalError.value = authErrorMessage()
-    else throw err
+    if (!authFailed(err)) throw err
   }
 }
 
@@ -88,9 +98,7 @@ const select = async (id: number) => {
     if (err instanceof ApiError && err.notFound) {
       globalError.value = '该会话不存在或无权访问，已自动移除'
       dropConversation(id)
-    } else if (err instanceof ApiError && err.unauthorized) {
-      globalError.value = authErrorMessage()
-    } else {
+    } else if (!authFailed(err)) {
       throw err
     }
   }
@@ -118,14 +126,12 @@ const send = async () => {
     // 网络失败（fetch reject / HTTP 非 2xx）：收口为 error 并展示错误文本，
     // 轮次不再卡在 streaming；404/401 走无感分支
     if (err instanceof ApiError && err.notFound) {
-      failTurn(turn, new Error('该会话已不可用（可能已删除或归属其他用户）'))
-      globalError.value = '该会话已不可用（可能已删除或归属其他用户）'
+      failTurn(turn, new Error(CONV_UNAVAILABLE))
+      globalError.value = CONV_UNAVAILABLE
       dropConversation(convId)
       await refresh()
-    } else if (err instanceof ApiError && err.unauthorized) {
-      globalError.value = authErrorMessage()
-      failTurn(turn, err)
     } else {
+      authFailed(err) // 401 时置全局横幅（failTurn 对 401 与其他错误一致）
       failTurn(turn, err)
     }
   } finally {
@@ -151,11 +157,10 @@ const fillPrompt = (text: string) => {
 }
 
 onMounted(async () => {
-  try {
-    identityOptions.value = await fetchIdentityOptions()
-  } catch {
-    identityOptions.value = [] // 后端未起等场景：切换器隐藏，退化为 env 身份
-  }
+  // 身份候选与会话列表互不依赖，并行拉取（options 失败仅隐藏切换器，不阻塞启动）
+  fetchIdentityOptions()
+    .then((opts) => { identityOptions.value = opts })
+    .catch(() => { identityOptions.value = [] })
   await refresh()
   if (conversations.value.length === 0) await newChat()
   else await select(conversations.value[0].id)

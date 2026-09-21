@@ -15,7 +15,7 @@ class AuthContextHolderTest {
 
     @Test
     void setThenGetThenClear() {
-        AuthContext ctx = new AuthContext("default", "linmj", "林同学");
+        AuthContext ctx = new AuthContext("default", "linmj");
         AuthContextHolder.set(ctx);
         assertThat(AuthContextHolder.get()).isSameAs(ctx);
         assertThat(AuthContextHolder.require()).isSameAs(ctx);

@@ -1,6 +1,7 @@
 package com.linagent.agent.persistence;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -13,6 +14,9 @@ import java.util.Optional;
 @Component
 public class AppUserRepository {
 
+    private static final RowMapper<AppUser> USER_ROW = (rs, i) -> new AppUser(
+        rs.getString(1), rs.getString(2), rs.getString(3), rs.getTimestamp(4).toInstant());
+
     private final JdbcTemplate jdbcTemplate;
 
     public AppUserRepository(JdbcTemplate jdbcTemplate) {
@@ -23,9 +27,7 @@ public class AppUserRepository {
         List<AppUser> rows = jdbcTemplate.query(
             "SELECT tenant_id, user_id, name, created_at FROM app_user "
                 + "WHERE tenant_id = ? AND user_id = ?",
-            (rs, i) -> new AppUser(rs.getString(1), rs.getString(2), rs.getString(3),
-                rs.getTimestamp(4).toInstant()),
-            tenantId, userId);
+            USER_ROW, tenantId, userId);
         return rows.stream().findFirst();
     }
 
@@ -33,7 +35,6 @@ public class AppUserRepository {
     public List<AppUser> findAll() {
         return jdbcTemplate.query(
             "SELECT tenant_id, user_id, name, created_at FROM app_user ORDER BY tenant_id, user_id",
-            (rs, i) -> new AppUser(rs.getString(1), rs.getString(2), rs.getString(3),
-                rs.getTimestamp(4).toInstant()));
+            USER_ROW);
     }
 }
