@@ -47,4 +47,18 @@
       </dependency>
     </dependencies>
   </dependencyManagement>
+  <build>
+    <pluginManagement>
+      <plugins>
+        <!-- manual 分组（真实 API 探针/冒烟）默认排除，显式触发：mvn test -Dgroups=manual -Dsurefire.excludedGroups= -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <configuration>
+            <excludedGroups>manual</excludedGroups>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
 </project>
