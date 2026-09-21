@@ -84,4 +84,12 @@ class AuthContextFilterTest {
         webTestClient.get().uri("/index.html")
             .exchange().expectStatus().isNotFound(); // 404（无此静态资源）而非 401
     }
+
+    @Test
+    void identityOptionsPathExemptFromAuth() {
+        // 切换器候选名单免鉴权：无身份头也不是 401（本切片无该 mapping → 404 落地 DispatcherServlet）
+        when(authenticator.authenticate(any(), any())).thenReturn(Optional.empty());
+        webTestClient.get().uri("/api/identity/options")
+            .exchange().expectStatus().isNotFound();
+    }
 }
