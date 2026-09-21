@@ -1,4 +1,6 @@
--- v0.2 多租户：用户表（本期鉴权唯一数据源）+ conversation 归属列
+-- v0.2 多租户：用户表（本期鉴权唯一数据源）。
+-- conversation 归属列（tenant_id/user_id 加列 + 回填 + 索引）后置到 V5，
+-- 避免 NOT NULL 约束先于写路径改造生效导致 conversation 写入失败。
 CREATE TABLE app_user (
   tenant_id  VARCHAR(64)  NOT NULL,
   user_id    VARCHAR(64)  NOT NULL,
@@ -9,10 +11,3 @@ CREATE TABLE app_user (
 INSERT INTO app_user (tenant_id, user_id, name) VALUES
   ('default', 'linmj', '林同学'),
   ('default', 'tester', '测试');
-
-ALTER TABLE conversation ADD COLUMN tenant_id VARCHAR(64),
-                         ADD COLUMN user_id   VARCHAR(64);
-UPDATE conversation SET tenant_id = 'default', user_id = 'linmj';
-ALTER TABLE conversation ALTER COLUMN tenant_id SET NOT NULL,
-                         ALTER COLUMN user_id   SET NOT NULL;
-CREATE INDEX idx_conversation_tenant_user ON conversation (tenant_id, user_id);
