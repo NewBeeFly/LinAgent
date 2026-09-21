@@ -1,0 +1,137 @@
+/* LinAgent 设计令牌 —— 冷纸白基底 + 松绿（Lin/林）唯一强调色 */
+
+:root {
+  --paper: #F5F6F4;
+  --surface: #FFFFFF;
+  --ink: #1E2422;
+  --ink-soft: #5F6A66;
+  --ink-faint: #98A19D;
+  --line: #E3E7E4;
+  --pine: #2E5A47;
+  --pine-deep: #234739;
+  --pine-soft: #E9F0EB;
+  --danger: #C2412B;
+  --danger-soft: #FBEFEC;
+
+  --font-body: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-display: "Space Grotesk", var(--font-body);
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+
+  --content-width: 720px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+}
+
+::selection { background: var(--pine-soft); }
+
+/* 细滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #D4D9D6; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #C2C8C4; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 键盘焦点可见 */
+:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+/* ============ 助手答案的文档排版（Markdown） ============ */
+.answer-doc {
+  font-size: 15.5px;
+  line-height: 1.85;
+  color: var(--ink);
+}
+.answer-doc > *:first-child { margin-top: 0; }
+.answer-doc > *:last-child { margin-bottom: 0; }
+.answer-doc p { margin: 0.6em 0; }
+.answer-doc h1, .answer-doc h2, .answer-doc h3, .answer-doc h4 {
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 1.1em 0 0.45em;
+}
+.answer-doc h1 { font-size: 1.35em; }
+.answer-doc h2 { font-size: 1.2em; }
+.answer-doc h3 { font-size: 1.05em; }
+.answer-doc ul, .answer-doc ol { margin: 0.6em 0; padding-left: 1.4em; }
+.answer-doc li { margin: 0.25em 0; }
+.answer-doc code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.answer-doc pre {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+.answer-doc pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.answer-doc blockquote {
+  margin: 0.8em 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--pine);
+  color: var(--ink-soft);
+}
+.answer-doc table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  font-size: 14px;
+}
+.answer-doc th, .answer-doc td {
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  text-align: left;
+}
+.answer-doc th { background: var(--paper); font-weight: 600; }
+.answer-doc a { color: var(--pine); text-decoration: none; }
+.answer-doc a:hover { text-decoration: underline; }
+.answer-doc hr { border: none; border-top: 1px solid var(--line); margin: 1.2em 0; }
+
+/* 流式光标 */
+.caret::after {
+  content: "▍";
+  display: inline-block;
+  color: var(--pine);
+  animation: caret-blink 1s steps(1) infinite;
+  margin-left: 1px;
+  vertical-align: -2px;
+}
+@keyframes caret-blink { 50% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .caret::after { animation: none; }
+  * { transition: none !important; }
+}

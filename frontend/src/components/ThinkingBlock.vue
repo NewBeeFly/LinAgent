@@ -13,20 +13,54 @@ watch(() => props.streaming, (s) => { open.value = s }, { immediate: true })
 <template>
   <div class="thinking">
     <button class="toggle" @click="open = !open">
-      {{ streaming ? '💭 思考中…' : '💭 思考过程' }} {{ open ? '▾' : '▸' }}
+      <span class="dot" :class="{ live: streaming }"></span>
+      {{ streaming ? '思考中' : '思考过程' }}
+      <span class="chevron">{{ open ? '⌃' : '⌄' }}</span>
     </button>
     <pre v-show="open">{{ content }}</pre>
   </div>
 </template>
 
 <style scoped>
-.thinking { margin: 4px 0; }
-.toggle {
-  border: none; background: #f0f0f0; border-radius: 6px;
-  padding: 2px 10px; font-size: 12px; color: #666; cursor: pointer;
+.thinking {
+  position: relative;
 }
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: none;
+  padding: 3px 0;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.toggle:hover { color: var(--ink); }
+.chevron { font-size: 11px; color: var(--ink-faint); }
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.dot.live {
+  background: var(--pine);
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes dot-pulse { 50% { opacity: 0.35; } }
 pre {
-  background: #fafafa; border: 1px dashed #ddd; border-radius: 6px;
-  padding: 8px; font-size: 12px; white-space: pre-wrap; margin: 4px 0;
+  margin: 6px 0;
+  padding: 8px 0 8px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  border-left: 2px solid var(--line);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot.live { animation: none; }
 }
 </style>
