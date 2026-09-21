@@ -10,3 +10,4 @@ openai_key_副本.md
 frontend/.env.local
 .superpowers/
 .playwright-mcp/
+workspace/
