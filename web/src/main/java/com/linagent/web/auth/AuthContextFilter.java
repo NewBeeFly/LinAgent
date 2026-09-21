@@ -39,6 +39,15 @@ public class AuthContextFilter extends OncePerRequestFilter {
         return !request.getRequestURI().startsWith("/api");
     }
 
+    /**
+     * SSE 的 ASYNC dispatch 不再二次鉴权（显式固定 OncePerRequestFilter 的默认行为，
+     * 防默认变化或子类覆写后 ASYNC 重入在响应已提交后误写 401）。
+     */
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return true;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {

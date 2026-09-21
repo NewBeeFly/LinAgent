@@ -1,6 +1,5 @@
 package com.linagent.web.auth;
 
-import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.web.support.TestAuth;
 import org.junit.jupiter.api.BeforeEach;

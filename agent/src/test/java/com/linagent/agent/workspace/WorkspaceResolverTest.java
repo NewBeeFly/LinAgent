@@ -27,6 +27,8 @@ class WorkspaceResolverTest {
         assertThat(Files.isDirectory(personal)).isTrue();
         assertThat(Files.isDirectory(tmp.resolve("tenant-a").resolve("shared"))).isTrue();
         assertThat(Files.isSymbolicLink(personal.resolve("shared"))).isTrue();
+        assertThat(Files.readSymbolicLink(personal.resolve("shared")))
+            .isEqualTo(Path.of("..", "..", "shared"));
     }
 
     @Test
