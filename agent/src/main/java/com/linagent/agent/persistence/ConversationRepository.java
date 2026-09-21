@@ -9,8 +9,6 @@ import java.util.Optional;
 
 public interface ConversationRepository extends CrudRepository<Conversation, Long> {
 
-    List<Conversation> findAllByOrderByUpdatedAtDesc();
-
     /**
      * 多租户 v0.2（Task 3 先声明，Task 4 控制器切换调用）。
      * 实证（2026-09-21，SD JDBC 3.5.1）：派生查询在实体无 tenantId/userId 字段时

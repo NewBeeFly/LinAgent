@@ -83,12 +83,12 @@ class RepositoryTest {
     }
 
     @Test
-    void findAllByOrderByUpdatedAtDescReturnsNewestFirst() {
+    void findByTenantAndUserOrdersByUpdatedAtDesc() {
         Instant base = Instant.parse("2020-01-01T00:00:00Z");
         conversations.save(new Conversation(null, "旧", "c-1", null, 0, "default", "linmj", base, base));
         conversations.save(new Conversation(null, "新", "c-2", null, 0, "default", "linmj", base, base.plusSeconds(3600)));
 
-        List<Conversation> ordered = conversations.findAllByOrderByUpdatedAtDesc();
+        List<Conversation> ordered = conversations.findByTenantIdAndUserIdOrderByUpdatedAtDesc("default", "linmj");
         assertThat(ordered).extracting(Conversation::threadId).containsExactly("c-2", "c-1");
     }
 

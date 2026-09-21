@@ -47,6 +47,7 @@ class ConversationIsolationTest {
 
     @AfterEach
     void cleanup() {
+        if (linmjConvId == null) return; // setup 失败时不 NPE 掩盖原始失败
         webTestClient.mutate().defaultHeaders(TestAuth.LINMJ).build()
             .delete().uri("/api/conversations/%d".formatted(linmjConvId))
             .exchange().expectStatus().isNoContent();

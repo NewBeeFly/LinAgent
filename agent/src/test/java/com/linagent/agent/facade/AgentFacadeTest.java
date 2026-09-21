@@ -378,7 +378,6 @@ class AgentFacadeTest {
         @Override public void deleteAllById(Iterable<? extends Long> ids) { ids.forEach(this::deleteById); }
         @Override public void deleteAll(Iterable<? extends Conversation> entities) { entities.forEach(this::delete); }
         @Override public void deleteAll() { data.clear(); }
-        @Override public List<Conversation> findAllByOrderByUpdatedAtDesc() { return List.copyOf(data); }
         /** 多租户查询（Task 4 起真实按归属过滤，防跨任务静默串租户） */
         @Override public List<Conversation> findByTenantIdAndUserIdOrderByUpdatedAtDesc(String tenantId, String userId) {
             return data.stream()

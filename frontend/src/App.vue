@@ -36,9 +36,14 @@ const dropConversation = (id: number) => {
 }
 
 const newChat = async () => {
-  const c = await createConversation()
-  await refresh()
-  await select(c.id)
+  try {
+    const c = await createConversation()
+    await refresh()
+    await select(c.id)
+  } catch (err) {
+    if (err instanceof ApiError && err.unauthorized) globalError.value = authErrorMessage()
+    else throw err
+  }
 }
 
 const refresh = async () => {
@@ -310,8 +315,8 @@ onMounted(async () => {
   margin: 0 16px 8px;
   padding: 8px 12px;
   border-radius: 8px;
-  background: rgba(192, 57, 43, 0.08);
-  color: #b03a2e;
+  background: var(--danger-soft);
+  color: var(--danger);
   font-size: 13px;
   cursor: pointer;
 }
