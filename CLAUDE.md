@@ -54,7 +54,7 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 
 并发约束（有 8×200 并发用例守护）：**所有事件发射必须经 `SerializedEmitSink`**（unicast sink 非线程安全）；**SegmentBuffer 全方法 synchronized + AtomicInteger seq**（recordToolCall 的 flush+save+seq 分配必须在同一临界区）。锁序单向：sink → buffer，无反向嵌套。
 
-每轮对话构建新 ReactAgent 实例（AgentFactory），saver/技能注册表/工具为共享 Bean。
+每轮对话构建新 ReactAgent 实例（AgentFactory），saver/技能注册表为共享 Bean；工具每轮构造（v0.2 个人根烤入，见「身份与工作区」）。
 
 ### 持久化分工（容易搞混）
 
