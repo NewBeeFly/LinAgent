@@ -59,6 +59,7 @@ Maven 三模块 + 前端独立目录：
 - `PostgresSaver` 不在 starter-memory-jdbc 里（那个只有已弃用的 ChatMemoryRepository 体系），在 graph-core。V2__checkpoint.sql 的 DDL 必须与 saver 内置 DDL 逐字符一致，saver 以 CREATE_NONE 模式初始化（DDL 归 Flyway 管）。
 - JSONB 直写需要 JDBC URL 带 `?stringtype=unspecified`（已固化在 application.yml 的 url 模板；`@ServiceConnection` 测试容器要用 `withUrlParam` 补）。
 - system prompt 模板（`agent/src/main/resources/prompts/system-prompt.md`）**启动时缓存**（ResidentPromptBuilder），改完必须重启后端才生效。
+- `mvn -pl web spring-boot:run` fork 出的 JVM **工作目录是 web 模块目录**：`agent.skills-root`/`agent.workspace-root` 这类相对路径配置裸解析会落到 `web/skills`（不存在）导致 0 技能加载（0 技能时模型会幻觉编造技能名）。必须经 `ProjectPathResolver.resolveDir`（cwd → 父目录上溯一级）解析，直接 `Path.of(相对路径)` 是回归。
 
 ## 前端两个易踩点
 

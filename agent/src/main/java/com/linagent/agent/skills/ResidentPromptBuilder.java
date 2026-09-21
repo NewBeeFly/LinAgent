@@ -1,5 +1,6 @@
 package com.linagent.agent.skills;
 
+import com.linagent.agent.config.ProjectPathResolver;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -28,7 +29,7 @@ public class ResidentPromptBuilder {
                                  @Value("${agent.skills-root:./skills}") String skillsRoot,
                                  @Value("${agent.prompt-template:prompts/system-prompt.md}") String promptTemplate) {
         this.scanner = scanner;
-        this.skillsRoot = Path.of(skillsRoot);
+        this.skillsRoot = ProjectPathResolver.resolveDir(skillsRoot);
         this.promptTemplate = promptTemplate;
         this.cached = build();
     }
