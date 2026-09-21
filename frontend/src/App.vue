@@ -74,6 +74,9 @@ const select = async (id: number) => {
 const send = async () => {
   if (!input.value.trim() || !activeId.value || sending.value) return
   const text = input.value
+  // 捕获发送时刻的会话 id：流式期间用户可能切换会话，
+  // 错误分支（URL/drop）必须作用于发起会话而非重读当前 activeId
+  const convId = activeId.value
   input.value = ''
   sending.value = true
   // reactive 包裹：流式增量直接驱动重渲染（raw 对象的修改不触发响应式，
@@ -81,7 +84,7 @@ const send = async () => {
   const turn: ChatTurn = reactive(newTurn(text))
   turns.value.push(turn)
   try {
-    await streamSse(`/api/conversations/${activeId.value}/chat`, { content: text }, (ev) => {
+    await streamSse(`/api/conversations/${convId}/chat`, { content: text }, (ev) => {
       applySseEvent(turn, ev)
     })
     if (turn.status === 'streaming') turn.status = 'done'
@@ -91,7 +94,8 @@ const send = async () => {
     // 轮次不再卡在 streaming；404/401 走无感分支
     if (err instanceof ApiError && err.notFound) {
       failTurn(turn, new Error('该会话已不可用（可能已删除或归属其他用户）'))
-      dropConversation(activeId.value!)
+      globalError.value = '该会话已不可用（可能已删除或归属其他用户）'
+      dropConversation(convId)
       await refresh()
     } else if (err instanceof ApiError && err.unauthorized) {
       globalError.value = authErrorMessage()
