@@ -1,6 +1,7 @@
 package com.linagent.web.e2e;
 
 import com.linagent.agent.compaction.CompactionService;
+import com.linagent.web.support.TestAuth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -100,8 +101,10 @@ class AgentEndToEndTest {
     void setUp() {
         // 压缩检查放行：E2E 会话历史为空，不会触发压缩（防御脚本模型被误用于摘要）
         when(compactionService.compactIfNeeded(any())).thenReturn(Optional.empty());
-        // Testcontainers 首轮（含 Flyway/JIT）可能超过默认 5s
-        webTestClient = webTestClient.mutate().responseTimeout(Duration.ofSeconds(60)).build();
+        // Testcontainers 首轮（含 Flyway/JIT）可能超过默认 5s；
+        // 鉴权链（Task 3）：全上下文真实 HeaderUserAuthenticator + V4 种子（default/linmj），补默认身份 header
+        webTestClient = webTestClient.mutate().responseTimeout(Duration.ofSeconds(60))
+            .defaultHeaders(TestAuth.LINMJ).build();
     }
 
     /**
