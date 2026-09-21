@@ -27,7 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @DataJdbcTest(properties = {
     "spring.sql.init.mode=always",
-    "spring.sql.init.schema-locations=classpath:db/migration/V1__init.sql,classpath:db/migration/V3__compaction_anchor.sql"
+    "spring.sql.init.schema-locations=classpath:db/migration/V1__init.sql,"
+        + "classpath:db/migration/V3__compaction_anchor.sql,classpath:db/migration/V5__conversation_ownership.sql"
 })
 @Import({JdbcConverterConfig.class, CheckpointCleaner.class})
 @Testcontainers
@@ -95,10 +96,10 @@ class CheckpointCleanerTest {
 
         // 两段式落库（与 ConversationController.create 同语义）
         Conversation first = conversations.save(
-            Conversation.create("生产形态", "pending-" + System.nanoTime(), Instant.now()));
+            Conversation.create("生产形态", "pending-" + System.nanoTime(), "default", "linmj", Instant.now()));
         Conversation conv = conversations.save(new Conversation(first.id(), first.title(),
             "conv-" + first.id(), first.compactSummary(), first.compactedTurnSeq(),
-            first.createdAt(), first.updatedAt()));
+            first.tenantId(), first.userId(), first.createdAt(), first.updatedAt()));
         assertThat(conv.threadId()).isEqualTo("conv-" + conv.id());
 
         // agent 以该 threadId 落 checkpoint（AgentFacade → RunnableConfig）

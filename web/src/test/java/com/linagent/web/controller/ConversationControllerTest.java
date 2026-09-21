@@ -22,6 +22,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -66,7 +67,8 @@ class ConversationControllerTest {
             com.linagent.agent.persistence.Conversation e = inv.getArgument(0);
             if (e.id() == null) {
                 return new com.linagent.agent.persistence.Conversation(1L, e.title(), e.threadId(),
-                    e.compactSummary(), e.compactedTurnSeq(), e.createdAt(), e.updatedAt());
+                    e.compactSummary(), e.compactedTurnSeq(), e.tenantId(), e.userId(),
+                    e.createdAt(), e.updatedAt());
             }
             return e;
         });
@@ -90,7 +92,8 @@ class ConversationControllerTest {
             com.linagent.agent.persistence.Conversation e = inv.getArgument(0);
             if (e.id() == null) {
                 return new com.linagent.agent.persistence.Conversation(1L, e.title(), e.threadId(),
-                    e.compactSummary(), e.compactedTurnSeq(), e.createdAt(), e.updatedAt());
+                    e.compactSummary(), e.compactedTurnSeq(), e.tenantId(), e.userId(),
+                    e.createdAt(), e.updatedAt());
             }
             return e;
         });
@@ -105,12 +108,15 @@ class ConversationControllerTest {
         verify(conversations, times(2)).save(captor.capture());
         // 第二段：threadId 与会话 id 对齐（spec §3 threadId=conversationId 语义）
         assertThat(captor.getAllValues().get(1).threadId()).isEqualTo("conv-1");
+        // 归属随鉴权身份注入（多租户 v0.2：ctx.tenantId/ctx.userId）
+        assertThat(captor.getAllValues().get(1).tenantId()).isEqualTo("default");
+        assertThat(captor.getAllValues().get(1).userId()).isEqualTo("linmj");
     }
 
     @Test
     void listReturnsConversationsWithTurnCount() throws Exception {
-        when(conversations.findAllByOrderByUpdatedAtDesc()).thenReturn(List.of(
-            new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
+        when(conversations.findByTenantIdAndUserIdOrderByUpdatedAtDesc(any(), any())).thenReturn(List.of(
+            new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0, "default", "linmj",
                 java.time.Instant.now(), java.time.Instant.now())));
         when(turns.countByConversationId(1L)).thenReturn(3);
 
@@ -122,9 +128,10 @@ class ConversationControllerTest {
 
     @Test
     void turnsReplayReturnsNestedMessages() throws Exception {
-        when(conversations.findById(1L)).thenReturn(java.util.Optional.of(
-            new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
-                java.time.Instant.now(), java.time.Instant.now())));
+        when(conversations.findByIdAndTenantIdAndUserId(eq(1L), any(), any()))
+            .thenReturn(java.util.Optional.of(
+                new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
+                    "default", "linmj", java.time.Instant.now(), java.time.Instant.now())));
         when(turns.findByConversationIdOrderBySeqAsc(1L)).thenReturn(List.of(
             new com.linagent.agent.persistence.Turn(10L, 1L, 1, "COMPLETED", "STOP", null,
                 java.time.Instant.now(), java.time.Instant.now())));
@@ -140,15 +147,21 @@ class ConversationControllerTest {
 
     @Test
     void deleteReturnsNoContent() throws Exception {
+        when(conversations.findByIdAndTenantIdAndUserId(eq(1L), any(), any()))
+            .thenReturn(java.util.Optional.of(
+                new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
+                    "default", "linmj", java.time.Instant.now(), java.time.Instant.now())));
+
         mockMvc.perform(delete("/api/conversations/1").headers(authHeaders))
             .andExpect(status().isNoContent());
     }
 
     @Test
     void deleteCascadesCheckpointCleanupThenRemovesConversation() throws Exception {
-        when(conversations.findById(1L)).thenReturn(java.util.Optional.of(
-            new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
-                java.time.Instant.now(), java.time.Instant.now())));
+        when(conversations.findByIdAndTenantIdAndUserId(eq(1L), any(), any()))
+            .thenReturn(java.util.Optional.of(
+                new com.linagent.agent.persistence.Conversation(1L, "会话A", "conv-1", null, 0,
+                    "default", "linmj", java.time.Instant.now(), java.time.Instant.now())));
 
         mockMvc.perform(delete("/api/conversations/1").headers(authHeaders))
             .andExpect(status().isNoContent());
@@ -159,12 +172,14 @@ class ConversationControllerTest {
         order.verify(conversations).deleteById(1L);
     }
 
+    /** 非属主/不存在统一 404（多租户 v0.2：不泄漏存在性），且不触发级联清理 */
     @Test
-    void deleteUnknownConversationSkipsCleanup() throws Exception {
-        when(conversations.findById(404L)).thenReturn(java.util.Optional.empty());
+    void deleteUnknownConversationReturns404AndSkipsCleanup() throws Exception {
+        when(conversations.findByIdAndTenantIdAndUserId(eq(404L), any(), any()))
+            .thenReturn(java.util.Optional.empty());
 
         mockMvc.perform(delete("/api/conversations/404").headers(authHeaders))
-            .andExpect(status().isNoContent());
+            .andExpect(status().isNotFound());
 
         org.mockito.Mockito.verify(checkpointCleaner, org.mockito.Mockito.never())
             .deleteByConversationId(org.mockito.ArgumentMatchers.anyLong());

@@ -98,7 +98,7 @@ public class CompactionService {
         int maxTurnSeq = convTurns.isEmpty() ? anchor : convTurns.get(convTurns.size() - 1).seq();
 
         conversations.save(new Conversation(conv.id(), conv.title(), newThreadId, summary,
-            maxTurnSeq, conv.createdAt(), Instant.now()));
+            maxTurnSeq, conv.tenantId(), conv.userId(), conv.createdAt(), Instant.now()));
         return Optional.of(newThreadId);
     }
 
