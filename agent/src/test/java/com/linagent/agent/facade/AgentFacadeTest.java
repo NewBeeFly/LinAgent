@@ -6,12 +6,15 @@ import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.linagent.agent.agent.AgentFactory;
 import com.linagent.agent.compaction.CompactionService;
+import com.linagent.agent.context.AuthContext;
+import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.agent.persistence.Conversation;
 import com.linagent.agent.persistence.ConversationRepository;
 import com.linagent.agent.persistence.Message;
 import com.linagent.agent.persistence.MessageRepository;
 import com.linagent.agent.persistence.Turn;
 import com.linagent.agent.persistence.TurnRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -63,9 +66,9 @@ class AgentFacadeTest {
         stubUsage = usage(10, 20, 30);
 
         AgentFactory factory = mock(AgentFactory.class);
-        when(factory.create(any(), any(), any())).thenAnswer(inv -> {
-            capturedSink = inv.getArgument(0);
-            capturedUsageRef = inv.getArgument(1);
+        when(factory.create(any(), any(), any(), any())).thenAnswer(inv -> {
+            capturedSink = inv.getArgument(1);
+            capturedUsageRef = inv.getArgument(2);
             ReactAgent agent = mock(ReactAgent.class);
             when(agent.stream(any(UserMessage.class), any(RunnableConfig.class)))
                 .thenAnswer(streamInv -> stubAgentMainFlux());
@@ -77,6 +80,16 @@ class AgentFacadeTest {
         });
 
         facade = new AgentFacade(factory, compaction, conversations, turns, messages, "step-3.7-flash");
+
+        // ThreadLocal 边界运输：facade.chat() 在 defer 外 require()——测试线程即调用线程，
+        // 须先 set；本测试全部会话桩归属 ("default","linmj")，与 InMemory double 的
+        // findByIdAndTenantIdAndUserId 真实过滤匹配（归属打桩由此成立）
+        AuthContextHolder.set(new AuthContext("default", "linmj", "林同学"));
+    }
+
+    @AfterEach
+    void cleanAuthContext() {
+        AuthContextHolder.clear();
     }
 
     /** Spring AI Usage 桩（ThinkingTapChatModel 捕获的真实载荷形态；getter 返回 Integer） */

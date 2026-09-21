@@ -61,13 +61,16 @@ class AgentEndToEndTest {
     static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine")
         .withUrlParam("stringtype", "unspecified");
 
-    /** 独立工作区（静态初始化先于 @DynamicPropertySource）：list_dir 有真实内容可列 */
+    /** 独立工作区（静态初始化先于 @DynamicPropertySource）：list_dir 有真实内容可列。
+     *  Task 6 布局：FileTools 根 = {基根}/{tenant}/users/{user}，身份取 TestAuth.LINMJ */
     static final Path workspaceRoot = createWorkspace();
 
     static Path createWorkspace() {
         try {
             Path dir = Files.createTempDirectory("e2e-workspace");
-            Files.writeString(dir.resolve("a.txt"), "e2e sample file");
+            Path personal = dir.resolve("default").resolve("users").resolve("linmj");
+            Files.createDirectories(personal);
+            Files.writeString(personal.resolve("a.txt"), "e2e sample file");
             return dir;
         } catch (IOException e) {
             throw new UncheckedIOException(e);
