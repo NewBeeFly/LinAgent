@@ -16,6 +16,10 @@ mvn -pl web test -Dtest=ChatControllerSseTest
 mvn -pl agent test -Dtest=StepFunStreamingProbeTest -Dgroups=manual -Dsurefire.excludedGroups=
 mvn -pl web test -Dtest=SkillsSmokeTest -Dgroups=manual -Dsurefire.excludedGroups=
 
+# 双身份手工验证（curl 示例）
+curl -H "x-tenant-id: default" -H "x-user-id: linmj" http://localhost:8080/api/conversations
+# 前端身份经 VITE_TENANT_ID/VITE_USER_ID 配置（缺省 default/linmj）
+
 # 前端
 cd frontend && npx vitest run          # 单测
 cd frontend && npm run dev             # dev server（代理 /api → :8080）
@@ -34,6 +38,15 @@ Maven 三模块 + 前端独立目录：
 - `web/`：唯一可启动模块（`WebApplication`，scanBasePackages + `@EnableJdbcRepositories` 指向 agent 的 persistence 包）。
 - `frontend/`：Vue3 + Vite + TS。`turn.ts` 是实时 SSE 与历史回放共用的纯逻辑层（事件分区/工具按 callId 合并）。
 - `skills/`：仓库根目录（不在 jar 里）。frontmatter `resident: true` 的常驻技能全文注入 system prompt 静态区；其余经 `FilteredSkillRegistry` 交给 SAA `SkillsAgentHook` 渐进披露（模型调 `read_skill` 按需加载）。frontmatter 由自研 `SkillManifestScanner` 解析（SAA 的 SkillMetadata 不含自定义字段）。
+
+### 身份与工作区（v0.2）
+
+请求带 `x-tenant-id`/`x-user-id`（app_user 表校验，未知 401）。AuthContextFilter →
+AuthContextHolder（ThreadLocal，仅入口有效）→ facade.chat() **defer 外**捕获（订阅期在
+reactor 线程，届时已清理——defer 内读取是已实证的坑）。工具每轮构造，个人根 =
+`{agent.workspace-root}/{tenant}/users/{user}`，根内 `shared` 符号链接挂载租户共享区
+（WorkspaceResolver 幂等 provision）。conversation 按 (tenant_id, user_id) 隔离，非属主 404。
+前端身份走 VITE_TENANT_ID/VITE_USER_ID（缺省 default/linmj）。
 
 ### 事件流核心（AgentFacade，改这里先读懂）
 
@@ -60,6 +73,7 @@ Maven 三模块 + 前端独立目录：
 - JSONB 直写需要 JDBC URL 带 `?stringtype=unspecified`（已固化在 application.yml 的 url 模板；`@ServiceConnection` 测试容器要用 `withUrlParam` 补）。
 - system prompt 模板（`agent/src/main/resources/prompts/system-prompt.md`）**启动时缓存**（ResidentPromptBuilder），改完必须重启后端才生效。
 - `mvn -pl web spring-boot:run` fork 出的 JVM **工作目录是 web 模块目录**：`agent.skills-root`/`agent.workspace-root` 这类相对路径配置裸解析会落到 `web/skills`（不存在）导致 0 技能加载（0 技能时模型会幻觉编造技能名）。必须经 `ProjectPathResolver.resolveDir`（cwd → 父目录上溯一级）解析，直接 `Path.of(相对路径)` 是回归。
+- @WebMvcTest 切片会自动装配 Filter 类型 Bean：AuthContextFilter 落地后所有 @WebMvcTest 必须 @MockBean RequestAuthenticator 并打桩（返回 TestAuth.LINMJ_CTX），否则 401/上下文失败。
 
 ## 前端两个易踩点
 
