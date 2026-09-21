@@ -47,6 +47,7 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 `{agent.workspace-root}/{tenant}/users/{user}`，根内 `shared` 符号链接挂载租户共享区
 （WorkspaceResolver 幂等 provision）。conversation 按 (tenant_id, user_id) 隔离，非属主 404。
 前端身份走 VITE_TENANT_ID/VITE_USER_ID（缺省 default/linmj）。
+- 已知边界：shell 工具仅以个人根为 cwd，无 OS 级沙箱——跨用户/跨租户文件可经 shell 命令访问；文件级隔离由 read_file/write_file/list_dir 的越界校验承担。多用户生产化前须补 shell 策略（deny-by-default / 按用户禁用）。
 
 ### 事件流核心（AgentFacade，改这里先读懂）
 
