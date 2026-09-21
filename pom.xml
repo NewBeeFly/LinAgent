@@ -9,8 +9,8 @@
     <version>3.5.3</version>
     <relativePath/>
   </parent>
-  <groupId>com.javaagent</groupId>
-  <artifactId>java-agent-parent</artifactId>
+  <groupId>com.linagent</groupId>
+  <artifactId>lin-agent-parent</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <packaging>pom</packaging>
   <modules>
