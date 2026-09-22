@@ -457,14 +457,14 @@ git commit -m "feat(compaction): turn 边界切割 + 工具配对回退保护（
         List<Message> req = captured.get(0).getInstructions();
         assertThat(req.get(req.size() - 1).getText()).isEqualTo(SummarizingModelHook.COMPACT_INSTRUCTION);
         assertThat(req.subList(0, req.size() - 1))
-            .containsExactlyElementsOf(msgs.subList(1, 10)); // a0..a4（u0 排除后 [1,10) 段）
-        // 结果结构：[Sys(摘要), 首条u0, ...保留区(u10..)]
+            .containsExactlyElementsOf(msgs.subList(1, 20)); // a0..a9（u0 排除后 [1,20) 段）
+        // 结果结构：[Sys(摘要), 首条u0, ...保留区(u10 起=msgs[20..60))]
         assertThat(result.get(0)).isInstanceOf(org.springframework.ai.chat.messages.SystemMessage.class);
         assertThat(result.get(0).getText()).startsWith(SummarizingModelHook.SUMMARY_PREFIX)
             .contains("压缩后的摘要正文");
         assertThat(result.get(1).getText()).startsWith("u0");
         assertThat(result.subList(2, result.size()))
-            .containsExactlyElementsOf(msgs.subList(10, msgs.size()));
+            .containsExactlyElementsOf(msgs.subList(20, msgs.size()));
     }
 
     @Test
@@ -541,7 +541,7 @@ git commit -m "feat(compaction): turn 边界切割 + 工具配对回退保护（
         assertThat(received.get(0).get(0)).isEqualTo("t-hook");
         assertThat(received.get(0).get(1)).isEqualTo("S");
         assertThat((int) received.get(0).get(2)).isEqualTo(60);   // 摘要前 60 条
-        assertThat((int) received.get(0).get(3)).isEqualTo(52);   // 摘要后 1+1+50
+        assertThat((int) received.get(0).get(3)).isEqualTo(42);   // 摘要后 1+1+40（保留区 msgs[20..60)）
     }
 ```
 
