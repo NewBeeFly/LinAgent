@@ -59,9 +59,15 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 
 ### 持久化分工（容易搞混）
 
-- **给模型的记忆**：SAA `PostgresSaver`（graph-core 内置，表 graphthread/graphcheckpoint），threadId = conversation.threadId。**threadId 命名是硬契约**：`conv-{id}` 原始线程、`conv-{id}-v{n}` 压缩换代线程——`CheckpointCleaner` 的删除模式依赖它。
+- **给模型的记忆**：SAA `PostgresSaver`（graph-core 内置，表 graphthread/graphcheckpoint），threadId = conversation.threadId，恒为 `conv-{id}`（不再压缩换代）；`CheckpointCleaner` 按 `conv-{id}` 前缀删除（`-v%` 模式仅为兼容历史行保留）。
 - **给前端的展示**：turn/message 表，**不存 delta**——THINKING/TEXT 按段落边界（工具调用开始/轮次结束）flush 完整 Message（SegmentBuffer 累积）；TOOL_CALL/TOOL_RESULT 各一行以 call_id 关联。
-- 压缩：`CompactionService` 阈值（`agent.compaction.threshold-tokens`，字符/4 估算）触发 LLM 摘要，写 `conversation.compact_summary` + threadId 换代 + 锚点列 `compacted_turn_seq`（估算基准 = 摘要/4 + 锚点后增量，防每轮重复压缩）。展示存储永不改动。
+- 压缩：`SummarizingModelHook`（BEFORE_MODEL，AgentFactory 挂载）对**真实 state messages**
+  估算 token（`agent.compaction.chars-per-token`，默认 2），超 `threshold-tokens` 时保最近
+  `keep-turns`（默认 20）个完整 turn + 首条 UserMessage，其余经 cache-safe 调用（原消息前缀
+  + 尾部压缩指令）生成摘要，`UpdatePolicy.REPLACE` 原地替换——**不换 threadId、不碰展示存储**；
+  失败/超时原样放行。threadId 恒为 `conv-{id}`；`compact_summary`/`compacted_turn_seq` 列停用
+  （PO 字段保留，创建传 null）；`CompactionSummarySink` 为跨会话接力预留（MVP LoggingSummarySink）。
+  已实证坑：`AgentCommand.getMessages()` 包私有——hook 核心逻辑须收在包可见 `compact()` 供单测。
 
 ## 实证过的坑（SAA 1.1.2.3 / Spring AI 1.1.2，勿凭记忆推翻）
 
