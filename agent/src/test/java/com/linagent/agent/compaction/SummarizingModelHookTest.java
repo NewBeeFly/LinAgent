@@ -1,6 +1,7 @@
 package com.linagent.agent.compaction;
 
 import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.linagent.agent.skills.ResidentPromptBuilder;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -20,8 +21,15 @@ class SummarizingModelHookTest {
 
     private final ChatModel model = mock(ChatModel.class);
 
+    /** ResidentPromptBuilder 为非 final 具体类，mock + 桩 build() 即可（不做任何重构抽取） */
+    private static ResidentPromptBuilder stubPrompt() {
+        ResidentPromptBuilder builder = mock(ResidentPromptBuilder.class);
+        when(builder.build()).thenReturn("stub-system-prompt");
+        return builder;
+    }
+
     private SummarizingModelHook hook(int thresholdTokens, int keepTurns) {
-        return new SummarizingModelHook(model, ctx -> {}, thresholdTokens, keepTurns, 2,
+        return new SummarizingModelHook(model, ctx -> {}, stubPrompt(), thresholdTokens, keepTurns, 2,
             Duration.ofSeconds(60));
     }
 
@@ -156,7 +164,9 @@ class SummarizingModelHookTest {
 
     @Test
     void compactReusesPrefixAndAppendsInstruction() {
-        // 30 轮，keepTurns=20 → toSummarize = [a0, u1, a1, ..., u4, a4]（u0 为首条 user 被排除）
+        // 30 轮，keepTurns=20 → cutoff=20：摘要请求 = [SystemMessage(stub system prompt),
+        // msgs[0..20) 原样（含首条 u0）, 尾部指令]——与主调用 [systemPrompt, u0, a0, ...]
+        // 从首位起前缀对齐（cache-safe，StepFun 从首 token 比对）
         java.util.List<org.springframework.ai.chat.messages.Message> msgs = new java.util.ArrayList<>();
         for (int i = 0; i < 30; i++) {
             msgs.add(new UserMessage("u" + i + " ".repeat(100))); // 撑大估算触发阈值
@@ -170,11 +180,14 @@ class SummarizingModelHookTest {
         List<Message> result = hook(1, 20).compact(msgs, config());
 
         assertThat(result).isNotNull();
-        // 摘要请求：前 N-1 条与 toSummarize 原样同引用（cache-safe 前缀），末条为指令 UserMessage
+        // 摘要请求：首位是与主调用逐字节对齐的 system prompt；中段 [1, n-1) 与 msgs.subList(0, 20)
+        // 逐位同引用（cache-safe 前缀）；末条为指令 UserMessage
         List<Message> req = captured.get(0).getInstructions();
         assertThat(req.get(req.size() - 1).getText()).isEqualTo(SummarizingModelHook.COMPACT_INSTRUCTION);
-        assertThat(req.subList(0, req.size() - 1))
-            .containsExactlyElementsOf(msgs.subList(1, 20)); // a0..a9（u0 排除后 [1,20) 段）
+        assertThat(req.get(0)).isInstanceOf(org.springframework.ai.chat.messages.SystemMessage.class);
+        assertThat(req.get(0).getText()).isEqualTo("stub-system-prompt");
+        assertThat(req.subList(1, req.size() - 1))
+            .zipSatisfy(msgs.subList(0, 20), (actual, expected) -> assertThat(actual).isSameAs(expected));
         // 结果结构：[Sys(摘要), 首条u0, ...保留区(u10 起=msgs[20..60))]
         assertThat(result.get(0)).isInstanceOf(org.springframework.ai.chat.messages.SystemMessage.class);
         assertThat(result.get(0).getText()).startsWith(SummarizingModelHook.SUMMARY_PREFIX)
@@ -202,7 +215,7 @@ class SummarizingModelHookTest {
             Thread.sleep(5_000);
             return summaryResponse("迟到的摘要");
         });
-        SummarizingModelHook quick = new SummarizingModelHook(model, ctx -> {}, 1, 20, 2,
+        SummarizingModelHook quick = new SummarizingModelHook(model, ctx -> {}, stubPrompt(), 1, 20, 2,
             java.time.Duration.ofMillis(100));
         List<Message> msgs = new java.util.ArrayList<>();
         for (int i = 0; i < 30; i++) {
@@ -233,11 +246,14 @@ class SummarizingModelHookTest {
             .count();
         assertThat(summaryCount).isEqualTo(1); // 不叠加
         assertThat(result.get(0).getText()).contains("合并后的新摘要");
-        // 旧摘要进入了摘要请求（被合并而非丢弃）
+        // 旧摘要进入了摘要请求（被合并而非丢弃）：请求首位为 system prompt，旧摘要 SystemMessage
+        // 紧随其后（index 1），其后才是原始对话历史
         org.mockito.ArgumentCaptor<org.springframework.ai.chat.prompt.Prompt> captor =
             org.mockito.ArgumentCaptor.forClass(org.springframework.ai.chat.prompt.Prompt.class);
         org.mockito.Mockito.verify(model).call(captor.capture());
-        assertThat(captor.getValue().getInstructions().get(0).getText()).contains("旧摘要内容");
+        List<Message> req = captor.getValue().getInstructions();
+        assertThat(req.get(0).getText()).isEqualTo("stub-system-prompt");
+        assertThat(req.get(1).getText()).contains("旧摘要内容");
     }
 
     @Test
@@ -246,7 +262,7 @@ class SummarizingModelHookTest {
             .thenReturn(summaryResponse("S"));
         List<java.util.List<Object>> received = new java.util.ArrayList<>();
         SummarizingModelHook h = new SummarizingModelHook(model, ctx -> received.add(List.of(
-            ctx.threadId(), ctx.summary(), ctx.messagesBefore(), ctx.messagesAfter())), 1, 20, 2,
+            ctx.threadId(), ctx.summary(), ctx.messagesBefore(), ctx.messagesAfter())), stubPrompt(), 1, 20, 2,
             Duration.ofSeconds(60));
         List<Message> msgs = new java.util.ArrayList<>();
         for (int i = 0; i < 30; i++) {
