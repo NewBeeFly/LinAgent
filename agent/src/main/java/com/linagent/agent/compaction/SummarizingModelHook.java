@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 
 import java.time.Duration;
@@ -97,9 +98,61 @@ public class SummarizingModelHook extends MessagesModelHook {
         return total;
     }
 
-    /** 切割点 = 倒数第 keepTurns 个 UserMessage 下标；Task 2 实现 */
+    private static final int SEARCH_RANGE_FOR_TOOL_PAIRS = 5;
+
+    /** 切割点 = 倒数第 keepTurns 个 UserMessage 的下标；配对不安全时向左回退；不足 K 轮返回 0 */
     int findTurnCutoff(List<Message> messages) {
-        return 0;
+        int turnStarts = 0;
+        int cutoff = -1;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i) instanceof UserMessage) {
+                turnStarts++;
+                if (turnStarts == keepTurns) {
+                    cutoff = i;
+                    break;
+                }
+            }
+        }
+        if (cutoff < 0) {
+            return 0;
+        }
+        while (cutoff > 0 && !isSafeCutoffPoint(messages, cutoff)) {
+            cutoff--;
+        }
+        return cutoff;
+    }
+
+    /** 切割点 k：[0,k) 被摘、[k,*) 保留；不得使 AssistantMessage(toolCalls) 与其 ToolResponseMessage 分居两侧 */
+    boolean isSafeCutoffPoint(List<Message> messages, int cutoffIndex) {
+        if (cutoffIndex >= messages.size()) {
+            return true;
+        }
+        int searchStart = Math.max(0, cutoffIndex - SEARCH_RANGE_FOR_TOOL_PAIRS);
+        int searchEnd = Math.min(messages.size(), cutoffIndex + SEARCH_RANGE_FOR_TOOL_PAIRS);
+        for (int i = searchStart; i < searchEnd; i++) {
+            Message msg = messages.get(i);
+            if (!(msg instanceof AssistantMessage assistantMessage) || assistantMessage.getToolCalls().isEmpty()) {
+                continue;
+            }
+            java.util.Set<String> toolCallIds = new java.util.HashSet<>();
+            for (AssistantMessage.ToolCall toolCall : assistantMessage.getToolCalls()) {
+                toolCallIds.add(toolCall.id());
+            }
+            for (int j = i + 1; j < messages.size(); j++) {
+                if (messages.get(j) instanceof ToolResponseMessage toolResponseMessage) {
+                    for (ToolResponseMessage.ToolResponse response : toolResponseMessage.getResponses()) {
+                        if (toolCallIds.contains(response.id())) {
+                            boolean aiBefore = i < cutoffIndex;
+                            boolean toolBefore = j < cutoffIndex;
+                            if (aiBefore != toolBefore) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     @Override
