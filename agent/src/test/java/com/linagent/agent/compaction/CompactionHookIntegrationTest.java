@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
 import com.alibaba.cloud.ai.graph.checkpoint.savers.postgresql.PostgresSaver;
+import com.linagent.agent.skills.ResidentPromptBuilder;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -72,8 +73,11 @@ class CompactionHookIntegrationTest {
         String threadId = "compact-" + System.nanoTime();
 
         RecordingModel model = new RecordingModel();
+        // 摘要请求前缀须与主调用 system prompt 对齐（cache-safe），本桩不校验内容、仅占位
+        ResidentPromptBuilder promptBuilder = org.mockito.Mockito.mock(ResidentPromptBuilder.class);
+        org.mockito.Mockito.when(promptBuilder.build()).thenReturn("stub-system-prompt");
         SummarizingModelHook hook = new SummarizingModelHook(
-            model, summaries::add, 5, 2, 2, Duration.ofSeconds(60)); // 阈值 5 tokens：必触发；保 2 轮
+            model, summaries::add, promptBuilder, 5, 2, 2, Duration.ofSeconds(60)); // 阈值 5 tokens：必触发；保 2 轮
 
         ReactAgent agent = ReactAgent.builder()
             .name("compact-test-agent")

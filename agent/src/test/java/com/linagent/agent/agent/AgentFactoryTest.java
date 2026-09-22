@@ -96,6 +96,6 @@ class AgentFactoryTest {
             new WorkspaceResolver(workspaceTmp.toString()),
             // 大阈值=单测内永不触发压缩（hook 仅装配验证）
             new SummarizingModelHook(mock(org.springframework.ai.chat.model.ChatModel.class),
-                ctx -> {}, 1_000_000, 20, 2, Duration.ofSeconds(60)));
+                ctx -> {}, promptBuilder, 1_000_000, 20, 2, Duration.ofSeconds(60)));
     }
 }

@@ -65,8 +65,9 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
   估算 token（`agent.compaction.chars-per-token`，默认 2），超 `threshold-tokens` 时保最近
   `keep-turns`（默认 20）个完整 turn + 首条 UserMessage，其余经 cache-safe 调用（原消息前缀
   + 尾部压缩指令）生成摘要，`UpdatePolicy.REPLACE` 原地替换——**不换 threadId、不碰展示存储**；
-  失败/超时原样放行。threadId 恒为 `conv-{id}`；`compact_summary`/`compacted_turn_seq` 列停用
-  （PO 字段保留，创建传 null）；`CompactionSummarySink` 为跨会话接力预留（MVP LoggingSummarySink）。
+  失败/超时原样放行。新会话 threadId 恒为 `conv-{id}`（存量 `-v{n}` 线程原样沿用，永不回写）；
+  `compact_summary`/`compacted_turn_seq` 列停用（PO 字段保留，创建时摘要列传 null、锚点列传 0
+  （NOT NULL 列））；`CompactionSummarySink` 为跨会话接力预留（MVP LoggingSummarySink）。
   已实证坑：`AgentCommand.getMessages()` 包私有——hook 核心逻辑须收在包可见 `compact()` 供单测。
 
 ## 实证过的坑（SAA 1.1.2.3 / Spring AI 1.1.2，勿凭记忆推翻）
