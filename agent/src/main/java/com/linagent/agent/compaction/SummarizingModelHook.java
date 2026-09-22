@@ -61,7 +61,7 @@ public class SummarizingModelHook extends MessagesModelHook {
             : new AgentCommand(compacted);
     }
 
-    /** null=放行；非null=REPLACE 新列表（Task 2/3 完成切割与摘要） */
+    /** null=放行；非null=REPLACE 新列表 [SystemMessage(摘要), 首条UserMessage?, ...保留区] */
     List<Message> compact(List<Message> previousMessages, RunnableConfig config) {
         int totalTokens = estimateTokens(previousMessages);
         if (totalTokens <= thresholdTokens) {
@@ -73,7 +73,64 @@ public class SummarizingModelHook extends MessagesModelHook {
                 keepTurns, totalTokens, config.threadId().orElse(""));
             return null;
         }
-        return null; // TODO(task2/task3)：切割与摘要在后续任务实现
+        UserMessage firstUser = null;
+        for (Message m : previousMessages) {
+            if (m instanceof UserMessage u) {
+                firstUser = u;
+                break;
+            }
+        }
+        List<Message> toSummarize = new java.util.ArrayList<>();
+        for (int i = 0; i < cutoff; i++) {
+            if (previousMessages.get(i) != firstUser) {
+                toSummarize.add(previousMessages.get(i));
+            }
+        }
+        if (toSummarize.isEmpty()) {
+            return null;
+        }
+
+        int messagesBefore = previousMessages.size();
+        long start = System.currentTimeMillis();
+        String summary = summarize(toSummarize, config);
+        if (summary == null || summary.isBlank()) {
+            return null; // 宁可超长不丢记忆
+        }
+
+        List<Message> newMessages = new java.util.ArrayList<>();
+        newMessages.add(new org.springframework.ai.chat.messages.SystemMessage(SUMMARY_PREFIX + summary));
+        if (firstUser != null && previousMessages.indexOf(firstUser) < cutoff) {
+            newMessages.add(firstUser);
+        }
+        newMessages.addAll(previousMessages.subList(cutoff, previousMessages.size()));
+
+        log.info("[compaction] threadId={} 估算tokens={} 阈值={} 消息 {}→{} 摘要耗时={}ms summaryChars={}",
+            config.threadId().orElse(""), totalTokens, thresholdTokens, messagesBefore,
+            newMessages.size(), System.currentTimeMillis() - start, summary.length());
+        summarySink.onSummary(new CompactionSummarySink.SummaryContext(
+            config.threadId().orElse(""), summary, messagesBefore, newMessages.size()));
+        return newMessages;
+    }
+
+    /** cache-safe 摘要：原消息（字节原样前缀）+ 尾部压缩指令；失败/超时返回 null */
+    private String summarize(List<Message> toSummarize, RunnableConfig config) {
+        List<Message> request = new java.util.ArrayList<>(toSummarize);
+        request.add(new org.springframework.ai.chat.messages.UserMessage(COMPACT_INSTRUCTION));
+        try {
+            org.springframework.ai.chat.model.ChatResponse resp = reactor.core.publisher.Mono
+                .fromCallable(() -> chatModel.call(new org.springframework.ai.chat.prompt.Prompt(request)))
+                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                .block(summaryTimeout);
+            if (resp != null && resp.getMetadata() != null && resp.getMetadata().getUsage() != null) {
+                log.info("[compaction] 摘要调用 usage={}（验证 cache-safe 命中看 cached/prompt 比值）",
+                    resp.getMetadata().getUsage());
+            }
+            return resp == null ? null : resp.getResult().getOutput().getText();
+        } catch (Exception e) {
+            log.warn("[compaction] 摘要失败（本轮跳过，下轮重试）threadId={} 原因={}",
+                config.threadId().orElse(""), e.getMessage());
+            return null;
+        }
     }
 
     /** 估算口径：移植 SAA TokenCounter.approximateMsgCounter（含 ToolResponse 数据与 toolCall arguments） */
