@@ -13,6 +13,9 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.List;
@@ -26,6 +29,7 @@ import java.util.List;
  * compact()（null=放行 / 非 null=REPLACE 新列表），beforeModel 仅做 AgentCommand 包装。
  */
 @HookPositions(HookPosition.BEFORE_MODEL)
+@Component
 public class SummarizingModelHook extends MessagesModelHook {
 
     private static final Logger log = LoggerFactory.getLogger(SummarizingModelHook.class);
@@ -42,6 +46,18 @@ public class SummarizingModelHook extends MessagesModelHook {
     private final int charsPerToken;
     private final Duration summaryTimeout;
 
+    /** Spring 装配构造器（@Value 注入配置）；与下方六参构造器并存时必须 @Autowired 指定本构造器 */
+    @Autowired
+    public SummarizingModelHook(ChatModel chatModel, CompactionSummarySink summarySink,
+                                @Value("${agent.compaction.threshold-tokens:48000}") int thresholdTokens,
+                                @Value("${agent.compaction.keep-turns:20}") int keepTurns,
+                                @Value("${agent.compaction.chars-per-token:2}") int charsPerToken,
+                                @Value("${agent.compaction.summary-timeout-seconds:60}") long summaryTimeoutSeconds) {
+        this(chatModel, summarySink, thresholdTokens, keepTurns, charsPerToken,
+            Duration.ofSeconds(summaryTimeoutSeconds));
+    }
+
+    /** 单测直用构造器（显式 Duration 超时） */
     public SummarizingModelHook(ChatModel chatModel, CompactionSummarySink summarySink,
                                 int thresholdTokens, int keepTurns, int charsPerToken,
                                 Duration summaryTimeout) {

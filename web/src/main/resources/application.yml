@@ -21,4 +21,7 @@ agent:
   skills-root: ./skills
   workspace-root: ./workspace
   compaction:
-    threshold-tokens: 24000
+    threshold-tokens: 48000
+    keep-turns: 20
+    summary-timeout-seconds: 60
+    chars-per-token: 2

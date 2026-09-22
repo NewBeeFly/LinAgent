@@ -5,7 +5,6 @@ import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.linagent.agent.agent.AgentFactory;
-import com.linagent.agent.compaction.CompactionService;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.agent.persistence.po.Conversation;
@@ -17,7 +16,6 @@ import com.linagent.agent.persistence.repository.TurnRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import reactor.core.publisher.Flux;
@@ -33,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -42,7 +41,6 @@ class AgentFacadeTest {
     private InMemoryConversationRepository conversations;
     private InMemoryTurnRepository turns;
     private InMemoryMessageRepository messages;
-    private CompactionService compaction;
     /** 桩 agent 每次订阅前向 side sink 预置的事件（模拟 ThinkingTap / 工具拦截器发射） */
     private final List<Object> stubSideEvents = new ArrayList<>();
     /** 桩 agent 主流：null = 默认两个文本 chunk；否则按此 Flux 输出 */
@@ -58,8 +56,6 @@ class AgentFacadeTest {
         conversations = new InMemoryConversationRepository();
         turns = new InMemoryTurnRepository();
         messages = new InMemoryMessageRepository();
-        compaction = mock(CompactionService.class);
-        when(compaction.compactIfNeeded(any())).thenReturn(Optional.empty());
         stubSideEvents.clear();
         stubMainFlux = null;
         // 默认喂一份真实捕获形态的 usage（终审 Important 2：收尾落 turn.usage）
@@ -72,14 +68,11 @@ class AgentFacadeTest {
             ReactAgent agent = mock(ReactAgent.class);
             when(agent.stream(any(UserMessage.class), any(RunnableConfig.class)))
                 .thenAnswer(streamInv -> stubAgentMainFlux());
-            // 摘要前置路径：List 输入重载（SystemMessage + UserMessage）
-            when(agent.stream(any(List.class), any(RunnableConfig.class)))
-                .thenAnswer(streamInv -> stubAgentMainFlux());
             capturedAgent = agent;
             return new AgentFactory.AgentHandle(agent, null, "stub-system-prompt");
         });
 
-        facade = new AgentFacade(factory, compaction, conversations, turns, messages, "step-3.7-flash");
+        facade = new AgentFacade(factory, conversations, turns, messages, "step-3.7-flash");
 
         // ThreadLocal 边界运输：facade.chat() 在 defer 外 require()——测试线程即调用线程，
         // 须先 set；本测试全部会话桩归属 ("default","linmj")，与 InMemory double 的
@@ -275,70 +268,26 @@ class AgentFacadeTest {
     }
 
     @Test
-    void chatRunsCompactionAndSwitchesToNewThreadWithSummaryPrefix() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
-        Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
-        // 模拟 CompactionService 的副作用：更新 conversation 的 threadId + compact_summary
-        when(compaction.compactIfNeeded(conv.id())).thenAnswer(inv -> {
-            conversations.save(new Conversation(conv.id(), conv.title(), "conv-1-v1",
-                "压缩后的历史摘要", 2, conv.tenantId(), conv.userId(), conv.createdAt(), Instant.now()));
-            return Optional.of("conv-1-v1");
-        });
-
-        StepVerifier.create(facade.chat(conv.id(), "你好"))
-            .expectNextMatches(e -> e instanceof AgentEvent.Meta)
-            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta)
-            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta)
-            .expectNextMatches(e -> e instanceof AgentEvent.TurnDone)
-            .verifyComplete();
-
-        // facade 重新读取 conversation：新 threadId 进 RunnableConfig
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<org.springframework.ai.chat.messages.Message>> inputCaptor =
-            ArgumentCaptor.forClass((Class) List.class);
-        ArgumentCaptor<RunnableConfig> configCaptor = ArgumentCaptor.forClass(RunnableConfig.class);
-        verify(capturedAgent).stream(inputCaptor.capture(), configCaptor.capture());
-        assertThat(configCaptor.getValue().threadId()).contains("conv-1-v1");
-
-        // 摘要以 SystemMessage 前置到发给 agent 的输入消息
-        List<org.springframework.ai.chat.messages.Message> input = inputCaptor.getValue();
-        assertThat(input).hasSize(2);
-        assertThat(input.get(0)).isInstanceOf(org.springframework.ai.chat.messages.SystemMessage.class);
-        assertThat(input.get(0).getText()).isEqualTo("此前对话摘要：压缩后的历史摘要");
-        assertThat(input.get(1)).isInstanceOf(UserMessage.class);
-        assertThat(input.get(1).getText()).isEqualTo("你好");
-    }
-
-    @Test
-    void chatWithExistingCompactSummaryAlwaysPrependsSummarySystemMessage() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
-        // 已压缩会话（compact_summary 已存在、本轮未再触发压缩）：摘要常驻输入
-        Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1-v1", "既有摘要", 2, "default", "linmj", Instant.now(), Instant.now()));
-
-        StepVerifier.create(facade.chat(conv.id(), "继续"))
-            .expectNextMatches(e -> e instanceof AgentEvent.Meta)
-            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta)
-            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta)
-            .expectNextMatches(e -> e instanceof AgentEvent.TurnDone)
-            .verifyComplete();
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<org.springframework.ai.chat.messages.Message>> inputCaptor =
-            ArgumentCaptor.forClass((Class) List.class);
-        verify(capturedAgent).stream(inputCaptor.capture(), any(RunnableConfig.class));
-        assertThat(inputCaptor.getValue().get(0).getText()).isEqualTo("此前对话摘要：既有摘要");
-        assertThat(inputCaptor.getValue().get(1).getText()).isEqualTo("继续");
-    }
-
-    @Test
-    void chatWithoutSummarySendsPlainUserMessage() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
-        Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+    void chatAlwaysSendsPlainUserMessageRegardlessOfLegacySummary() throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
+        Conversation conv = conversations.seed("遗留摘要正文");
         facade.chat(conv.id(), "你好").blockLast();
+        // hook 化后 AgentFacade 恒只传当前 UserMessage（历史由 checkpoint 恢复；
+        // 旧 compact_summary 列不再参与输入——根治重复注入）
+        verify(capturedAgent).stream(any(UserMessage.class), any(RunnableConfig.class));
+        verify(capturedAgent, never()).stream(any(List.class), any(RunnableConfig.class));
+    }
 
-        ArgumentCaptor<UserMessage> inputCaptor = ArgumentCaptor.forClass(UserMessage.class);
-        verify(capturedAgent).stream(inputCaptor.capture(), any(RunnableConfig.class));
-        assertThat(inputCaptor.getValue().getText()).isEqualTo("你好");
+    @Test
+    void displayStorageOnlyAppendsNeverRemoves() {
+        Conversation conv = conversations.seed(null);
+        List<Integer> sizes = new java.util.ArrayList<>();
+        for (int i = 1; i <= 3; i++) {
+            facade.chat(conv.id(), "第" + i + "轮").blockLast();
+            sizes.add(messages.data.size()); // InMemory double 的内部集合
+        }
+        // 单调递增且每轮都有新增：压缩只发生在 checkpoint 层（hook），turn/message 永不回删
+        assertThat(sizes).isSorted();
+        assertThat(sizes.get(sizes.size() - 1)).isGreaterThan(sizes.get(0));
     }
 
     /** 桩：LLM 节点流式 chunk（SAA 实测 API：StreamingOutput(Message, node, agent, state)） */
@@ -351,6 +300,14 @@ class AgentFacadeTest {
     static class InMemoryConversationRepository implements ConversationRepository {
         long nextId = 1;
         final List<Conversation> data = new ArrayList<>();
+
+        /** 测试辅助：落一条默认归属 ("default","linmj") 的会话（与 AuthContext 桩匹配），摘要列可空 */
+        Conversation seed(String compactSummary) {
+            long id = nextId;
+            return save(new Conversation(null, "t", "conv-" + id, compactSummary, 0,
+                "default", "linmj", Instant.now(), Instant.now()));
+        }
+
         @SuppressWarnings("unchecked")
         @Override public <S extends Conversation> S save(S e) {
             Long id = e.id() == null ? nextId++ : e.id();

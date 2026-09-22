@@ -6,7 +6,6 @@ import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.linagent.agent.agent.AgentFactory;
 import com.linagent.agent.agent.EventEmittingToolInterceptor;
-import com.linagent.agent.compaction.CompactionService;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.agent.persistence.po.Conversation;
@@ -16,7 +15,6 @@ import com.linagent.agent.persistence.repository.MessageRepository;
 import com.linagent.agent.persistence.po.Turn;
 import com.linagent.agent.persistence.repository.TurnRepository;
 import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -24,7 +22,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Sinks;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -45,18 +42,16 @@ import java.util.concurrent.atomic.AtomicReference;
 public class AgentFacade {
 
     private final AgentFactory agentFactory;
-    private final CompactionService compactionService;
     private final ConversationRepository conversations;
     private final TurnRepository turns;
     private final MessageRepository messages;
     private final String model;
 
-    public AgentFacade(AgentFactory agentFactory, CompactionService compactionService,
+    public AgentFacade(AgentFactory agentFactory,
                        ConversationRepository conversations, TurnRepository turns,
                        MessageRepository messages,
                        @Value("${spring.ai.openai.chat.options.model:step-3.7-flash}") String model) {
         this.agentFactory = agentFactory;
-        this.compactionService = compactionService;
         this.conversations = conversations;
         this.turns = turns;
         this.messages = messages;
@@ -70,9 +65,8 @@ public class AgentFacade {
         // 归属预检同步抛出：HTTP 404（GlobalExceptionHandler 映射）先于 SSE 建流
         conversations.requireOwned(conversationId, ctx.tenantId(), ctx.userId());
         return Flux.defer(() -> {
-            // 压缩检查在读取会话之前（UserMessage 不进本次压缩摘要），超阈值时切换新 threadId
-            compactionService.compactIfNeeded(conversationId);
-            // 压缩后 threadId/compact_summary 已更新，必须重新读取
+            // 历史由 checkpoint 恢复（AppendStrategy 合并当前输入）；压缩在
+            // SummarizingModelHook（BEFORE_MODEL）按真实消息触发，facade 不再预压缩
             Conversation conv = conversations.findById(conversationId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + conversationId));
 
@@ -109,18 +103,10 @@ public class AgentFacade {
             });
 
             // agent.stream 声明受检 GraphRunnerException，在 defer 内转 Flux.error 走统一错误路径；
-            // 压缩过的会话（compact_summary 非空）把摘要以前置 SystemMessage 常驻输入
-            // （SAA stream 同时支持 UserMessage 与 List<Message> 重载，List 路径经源码核实
-            //  会完整进入 graph state 的 messages，末条 UserMessage 提取为 input）
+            // 恒只传当前 UserMessage（spec §4：根治摘要重复注入）
             Flux<NodeOutput> nodeOutputs;
             try {
-                if (conv.compactSummary() == null || conv.compactSummary().isBlank()) {
-                    nodeOutputs = handle.agent().stream(new UserMessage(content), config);
-                } else {
-                    nodeOutputs = handle.agent().stream(List.of(
-                        new SystemMessage("此前对话摘要：" + conv.compactSummary()),
-                        new UserMessage(content)), config);
-                }
+                nodeOutputs = handle.agent().stream(new UserMessage(content), config);
             } catch (GraphRunnerException e) {
                 nodeOutputs = Flux.error(e);
             }

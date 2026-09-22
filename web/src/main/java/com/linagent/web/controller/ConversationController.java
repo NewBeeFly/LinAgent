@@ -46,8 +46,10 @@ public class ConversationController {
         // 临时值只需绕开 NOT NULL 且不与正式模式冲突，落库即被第二段覆盖。
         Conversation first = conversations.save(
             Conversation.create(title, "pending-" + System.nanoTime(), ctx.tenantId(), ctx.userId(), Instant.now()));
+        // 摘要与压缩锚点已由 hook 体系（SummarizingModelHook）接管，compact_summary/compacted_turn_seq
+        // 列停用（compacted_turn_seq 为 NOT NULL DEFAULT 0，按无锚点语义显式落 0）
         Conversation saved = conversations.save(new Conversation(first.id(), first.title(),
-            "conv-" + first.id(), first.compactSummary(), first.compactedTurnSeq(),
+            "conv-" + first.id(), null, 0,
             first.tenantId(), first.userId(), first.createdAt(), first.updatedAt()));
         return new ConversationResponse(saved.id(), saved.title(), 0, saved.updatedAt().toString());
     }

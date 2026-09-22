@@ -1,6 +1,5 @@
 package com.linagent.web.e2e;
 
-import com.linagent.agent.compaction.CompactionService;
 import com.linagent.web.support.TestAuth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,19 +28,17 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
 
 /**
  * 端到端：真实全链路（SSE 接口 → AgentFacade → ReactAgent/工具/checkpoint → PG 落库 →
- * 回放接口），仅两个刻意替换项：
+ * 回放接口），仅一个刻意替换项：
  * 1. ChatModel 换脚本桩（@Primary）——不依赖外部 LLM API，ReAct 交互形态不变
- *    （第 1 轮返回 list_dir 工具调用，之后每轮返回文本，工具循环多跑一轮也能收敛）；
- * 2. CompactionService 桩为 empty——避免 E2E 触发 LLM 压缩（脚本桩无摘要语义）。
+ *    （第 1 轮返回 list_dir 工具调用，之后每轮返回文本，工具循环多跑一轮也能收敛）。
+ *    压缩走 SummarizingModelHook（BEFORE_MODEL），E2E 会话远低于阈值不会触发，
+ *    脚本桩即便被误用于摘要也无碍。
  *
  * 其余全部真实：Testcontainers PG（Flyway V1/V2/V3 + PostgresSaver checkpoint）、
  * SegmentBuffer 落库、SseEventMapper 事件协议。
@@ -88,9 +85,6 @@ class AgentEndToEndTest {
     @Autowired
     JdbcTemplate jdbcTemplate;
 
-    @MockitoBean
-    CompactionService compactionService;
-
     @TestConfiguration
     static class StubModelConfig {
         @Bean
@@ -102,8 +96,6 @@ class AgentEndToEndTest {
 
     @BeforeEach
     void setUp() {
-        // 压缩检查放行：E2E 会话历史为空，不会触发压缩（防御脚本模型被误用于摘要）
-        when(compactionService.compactIfNeeded(any())).thenReturn(Optional.empty());
         // Testcontainers 首轮（含 Flyway/JIT）可能超过默认 5s；
         // 鉴权链（Task 3）：全上下文真实 HeaderUserAuthenticator + V4 种子（default/linmj），补默认身份 header
         webTestClient = webTestClient.mutate().responseTimeout(Duration.ofSeconds(60))
