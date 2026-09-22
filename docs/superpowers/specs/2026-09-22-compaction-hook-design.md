@@ -1,7 +1,7 @@
 # LinAgent 压缩策略重构设计文档（hook 化全量摘要）
 
 - 日期：2026-09-22
-- 状态：已与需求方逐节确认（K=20、展示层不动、方案 B 自定义 hook）
+- 状态：已实施（feat/compaction-hook，实施计划 docs/superpowers/plans/2026-09-22-compaction-hook.md）
 - 路径：Architectural（重设计压缩子系统，替换现有 CompactionService 换代体系）
 - 后续：本文档确认后，经 superpowers:writing-plans 产出实施计划，分支 `feat/compaction-hook` 迭代
 
