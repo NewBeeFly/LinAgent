@@ -2,6 +2,7 @@ package com.linagent.agent.agent;
 
 import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.skills.registry.filesystem.FileSystemSkillRegistry;
+import com.linagent.agent.compaction.SummarizingModelHook;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.skills.FilteredSkillRegistry;
 import com.linagent.agent.skills.ResidentPromptBuilder;
@@ -15,10 +16,12 @@ import reactor.core.publisher.Sinks;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 class AgentFactoryTest {
 
@@ -90,6 +93,9 @@ class AgentFactoryTest {
             registry,
             promptBuilder,
             new MemorySaver(),
-            new WorkspaceResolver(workspaceTmp.toString()));
+            new WorkspaceResolver(workspaceTmp.toString()),
+            // 大阈值=单测内永不触发压缩（hook 仅装配验证）
+            new SummarizingModelHook(mock(org.springframework.ai.chat.model.ChatModel.class),
+                ctx -> {}, 1_000_000, 20, 2, Duration.ofSeconds(60)));
     }
 }

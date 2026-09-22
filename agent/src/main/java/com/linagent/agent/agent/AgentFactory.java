@@ -7,6 +7,7 @@ import com.alibaba.cloud.ai.graph.agent.interceptor.Interceptor;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ToolInterceptor;
 import com.alibaba.cloud.ai.graph.agent.tools.ShellTool2;
 import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
+import com.linagent.agent.compaction.SummarizingModelHook;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.skills.FilteredSkillRegistry;
 import com.linagent.agent.skills.ResidentPromptBuilder;
@@ -38,17 +39,19 @@ public class AgentFactory {
     private final ResidentPromptBuilder residentPromptBuilder;
     private final BaseCheckpointSaver checkpointSaver;
     private final WorkspaceResolver workspaceResolver;
+    private final SummarizingModelHook summarizingHook;
 
     public AgentFactory(ChatModel chatModel, ThinkingExtractor thinkingExtractor,
                         FilteredSkillRegistry skillRegistry,
                         ResidentPromptBuilder residentPromptBuilder, BaseCheckpointSaver checkpointSaver,
-                        WorkspaceResolver workspaceResolver) {
+                        WorkspaceResolver workspaceResolver, SummarizingModelHook summarizingHook) {
         this.chatModel = chatModel;
         this.thinkingExtractor = thinkingExtractor;
         this.skillRegistry = skillRegistry;
         this.residentPromptBuilder = residentPromptBuilder;
         this.checkpointSaver = checkpointSaver;
         this.workspaceResolver = workspaceResolver;
+        this.summarizingHook = summarizingHook;
     }
 
     /** ReactAgent 不暴露 systemPrompt 读取口（仅 instruction()），装配产物随 handle 携带 */
@@ -89,7 +92,7 @@ public class AgentFactory {
             .model(tapped)
             .systemPrompt(systemPrompt)
             .tools(fileTools.toCallbacks())
-            .hooks(List.of(skillsHook, shellHook))
+            .hooks(List.of(skillsHook, shellHook, summarizingHook))
             .saver(checkpointSaver)
             .interceptors(interceptors)
             .build();
