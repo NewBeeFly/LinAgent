@@ -12,7 +12,9 @@ import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SummarizingModelHookTest {
 
@@ -140,5 +142,122 @@ class SummarizingModelHookTest {
         assertThat(h.isSafeCutoffPoint(pair, 0)).isTrue();  // 两者都在保留侧（同侧安全）
         assertThat(h.isSafeCutoffPoint(pair, 1)).isFalse(); // withCalls 被摘、toolResp 保留 → 孤儿 ToolResponse
         assertThat(h.isSafeCutoffPoint(pair, 2)).isTrue();  // 两者都被摘（同侧安全）
+    }
+
+    // ===== Task 3：摘要调用与结果组装
+
+    private org.springframework.ai.chat.model.ChatResponse summaryResponse(String text) {
+        org.springframework.ai.chat.messages.AssistantMessage msg =
+            org.springframework.ai.chat.messages.AssistantMessage.builder()
+                .content(text).properties(java.util.Map.of()).build();
+        return new org.springframework.ai.chat.model.ChatResponse(
+            List.of(new org.springframework.ai.chat.model.Generation(msg)));
+    }
+
+    @Test
+    void compactReusesPrefixAndAppendsInstruction() {
+        // 30 轮，keepTurns=20 → toSummarize = [a0, u1, a1, ..., u4, a4]（u0 为首条 user 被排除）
+        java.util.List<org.springframework.ai.chat.messages.Message> msgs = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            msgs.add(new UserMessage("u" + i + " ".repeat(100))); // 撑大估算触发阈值
+            msgs.add(new AssistantMessage("a" + i));
+        }
+        List<org.springframework.ai.chat.prompt.Prompt> captured = new java.util.ArrayList<>();
+        when(model.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(inv -> {
+            captured.add(inv.getArgument(0));
+            return summaryResponse("压缩后的摘要正文");
+        });
+        List<Message> result = hook(1, 20).compact(msgs, config());
+
+        assertThat(result).isNotNull();
+        // 摘要请求：前 N-1 条与 toSummarize 原样同引用（cache-safe 前缀），末条为指令 UserMessage
+        List<Message> req = captured.get(0).getInstructions();
+        assertThat(req.get(req.size() - 1).getText()).isEqualTo(SummarizingModelHook.COMPACT_INSTRUCTION);
+        assertThat(req.subList(0, req.size() - 1))
+            .containsExactlyElementsOf(msgs.subList(1, 20)); // a0..a9（u0 排除后 [1,20) 段）
+        // 结果结构：[Sys(摘要), 首条u0, ...保留区(u10 起=msgs[20..60))]
+        assertThat(result.get(0)).isInstanceOf(org.springframework.ai.chat.messages.SystemMessage.class);
+        assertThat(result.get(0).getText()).startsWith(SummarizingModelHook.SUMMARY_PREFIX)
+            .contains("压缩后的摘要正文");
+        assertThat(result.get(1).getText()).startsWith("u0");
+        assertThat(result.subList(2, result.size()))
+            .containsExactlyElementsOf(msgs.subList(20, msgs.size()));
+    }
+
+    @Test
+    void summaryFailureKeepsOriginalList() {
+        when(model.call(any(org.springframework.ai.chat.prompt.Prompt.class)))
+            .thenThrow(new RuntimeException("boom"));
+        List<Message> msgs = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            msgs.add(new UserMessage("u" + i + " ".repeat(100)));
+            msgs.add(new AssistantMessage("a" + i));
+        }
+        assertThat(hook(1, 20).compact(msgs, config())).isNull();
+    }
+
+    @Test
+    void summaryTimeoutKeepsOriginalList() {
+        when(model.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(inv -> {
+            Thread.sleep(5_000);
+            return summaryResponse("迟到的摘要");
+        });
+        SummarizingModelHook quick = new SummarizingModelHook(model, ctx -> {}, 1, 20, 2,
+            java.time.Duration.ofMillis(100));
+        List<Message> msgs = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            msgs.add(new UserMessage("u" + i + " ".repeat(100)));
+            msgs.add(new AssistantMessage("a" + i));
+        }
+        assertThat(quick.compact(msgs, config())).isNull();
+    }
+
+    @Test
+    void priorSummarySystemMessageGetsReSummarizedExactlyOnce() {
+        // 头部已有旧摘要 SystemMessage（上次 REPLACE 的产物）：本次触发时随被摘区一起
+        // 进入摘要请求（合并语义），结果里新摘要恰 1 份、旧摘要文本不再独立出现
+        when(model.call(any(org.springframework.ai.chat.prompt.Prompt.class)))
+            .thenReturn(summaryResponse("合并后的新摘要"));
+        List<Message> msgs = new java.util.ArrayList<>();
+        msgs.add(new org.springframework.ai.chat.messages.SystemMessage(
+            SummarizingModelHook.SUMMARY_PREFIX + "旧摘要内容"));
+        for (int i = 0; i < 30; i++) {
+            msgs.add(new UserMessage("u" + i + " ".repeat(100)));
+            msgs.add(new AssistantMessage("a" + i));
+        }
+        List<Message> result = hook(1, 20).compact(msgs, config());
+
+        assertThat(result).isNotNull();
+        long summaryCount = result.stream()
+            .filter(m -> m instanceof org.springframework.ai.chat.messages.SystemMessage)
+            .count();
+        assertThat(summaryCount).isEqualTo(1); // 不叠加
+        assertThat(result.get(0).getText()).contains("合并后的新摘要");
+        // 旧摘要进入了摘要请求（被合并而非丢弃）
+        org.mockito.ArgumentCaptor<org.springframework.ai.chat.prompt.Prompt> captor =
+            org.mockito.ArgumentCaptor.forClass(org.springframework.ai.chat.prompt.Prompt.class);
+        org.mockito.Mockito.verify(model).call(captor.capture());
+        assertThat(captor.getValue().getInstructions().get(0).getText()).contains("旧摘要内容");
+    }
+
+    @Test
+    void sinkNotifiedWithContext() {
+        when(model.call(any(org.springframework.ai.chat.prompt.Prompt.class)))
+            .thenReturn(summaryResponse("S"));
+        List<java.util.List<Object>> received = new java.util.ArrayList<>();
+        SummarizingModelHook h = new SummarizingModelHook(model, ctx -> received.add(List.of(
+            ctx.threadId(), ctx.summary(), ctx.messagesBefore(), ctx.messagesAfter())), 1, 20, 2,
+            Duration.ofSeconds(60));
+        List<Message> msgs = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            msgs.add(new UserMessage("u" + i + " ".repeat(100)));
+            msgs.add(new AssistantMessage("a" + i));
+        }
+        h.compact(msgs, config());
+        assertThat(received).hasSize(1);
+        assertThat(received.get(0).get(0)).isEqualTo("t-hook");
+        assertThat(received.get(0).get(1)).isEqualTo("S");
+        assertThat((int) received.get(0).get(2)).isEqualTo(60);   // 摘要前 60 条
+        assertThat((int) received.get(0).get(3)).isEqualTo(42);   // 摘要后 1+1+40（保留区 msgs[20..60)）
     }
 }
