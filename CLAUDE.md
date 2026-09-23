@@ -17,12 +17,12 @@ mvn -pl agent test -Dtest=StepFunStreamingProbeTest -Dgroups=manual -Dsurefire.e
 mvn -pl web test -Dtest=SkillsSmokeTest -Dgroups=manual -Dsurefire.excludedGroups=
 
 # 双身份手工验证（curl 示例）
-curl -H "x-tenant-id: default" -H "x-user-id: linmj" http://localhost:8080/api/conversations
+curl -H "x-tenant-id: default" -H "x-user-id: linmj" http://localhost:9018/api/conversations
 # 前端身份经 VITE_TENANT_ID/VITE_USER_ID 配置（缺省 default/linmj）
 
 # 前端
 cd frontend && npx vitest run          # 单测
-cd frontend && npm run dev             # dev server（代理 /api → :8080）
+cd frontend && npm run dev             # dev server（代理 /api → :9018）
 
 # 启动后端（agent 模块改动后必须先 install，否则 classpath 用的是旧 jar）
 mvn -pl agent install -DskipTests && mvn -pl web spring-boot:run

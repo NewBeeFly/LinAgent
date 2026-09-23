@@ -16,7 +16,7 @@
 
 ```bash
 psql -h localhost -U jiege -d postgres -c "CREATE DATABASE linagent OWNER jiege;"
-mvn -pl web spring-boot:run        # 后端 :8080
+mvn -pl web spring-boot:run        # 后端 :9018
 cd frontend && npm install && npm run dev   # 前端 :5173（代理 /api）
 ```
 
