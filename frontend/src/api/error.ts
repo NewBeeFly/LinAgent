@@ -16,6 +16,11 @@ export class ApiError extends Error {
     return this.status === 404
   }
 
+  /** 409：审批挂起挡回 / 决议冲突（重复提交、callId 不匹配） */
+  get conflict(): boolean {
+    return this.status === 409
+  }
+
   /** 从 fetch Response 构造：优先取后端 JSON {message}，回退 HTTP 状态描述 */
   static async from(resp: Response): Promise<ApiError> {
     let message = `HTTP ${resp.status}`

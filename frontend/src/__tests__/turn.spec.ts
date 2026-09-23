@@ -95,7 +95,7 @@ describe('历史回放（select 路径）', () => {
 
 describe('响应式触发（回归：流式增量必须驱动重渲染）', () => {
   it('reactive turn 上的 applySseEvent 变更会触发依赖更新（raw 对象不会——这正是一次性渲染的根因）', async () => {
-    const { reactive, computed, nextTick } = await import('vue')
+    const { reactive, computed } = await import('vue')
     const turn = reactive(newTurn('你好'))
     let evaluations = 0
     const renderedText = computed(() => {

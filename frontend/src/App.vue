@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, reactive, watch } from 'vue'
 import { streamSse } from './api/sse'
-import { createConversation, fetchIdentityOptions, getTurns, listConversations } from './api/rest'
+import { createConversation, fetchIdentityOptions, getPendingApproval, getTurns, listConversations } from './api/rest'
 import type { TenantIdentityOptions } from './api/rest'
 import { ApiError } from './api/error'
 import { currentIdentity, setIdentity } from './api/identity'
 import { applySseEvent, failTurn, newTurn, thinkingActive, turnFromRecord } from './turn'
-import type { ChatTurn, TurnRecord } from './types'
+import type { ApprovalDecisionPayload, ChatTurn, TurnRecord } from './types'
 import ThinkingBlock from './components/ThinkingBlock.vue'
 import ToolCard from './components/ToolCard.vue'
 import MessageBubble from './components/MessageBubble.vue'
+import ApprovalCard from './components/ApprovalCard.vue'
 
 interface ConversationItem { id: number; title: string; turnCount: number; updatedAt: string }
 
@@ -22,6 +23,9 @@ const sidebarOpen = ref(false)
 const timelineEl = ref<HTMLElement | null>(null)
 
 const globalError = ref('')
+
+/** 审批挂起横幅（409 挡回 / 刷新恢复发现挂起轮时置位，决议完成自动消解） */
+const approvalPending = ref(false)
 
 /** 会话不可用的统一文案（turn 收尾与全局横幅共用，改文案只动这里） */
 const CONV_UNAVAILABLE = '该会话已不可用（可能已删除或归属其他用户）'
@@ -55,6 +59,7 @@ const switchIdentity = async (key: string) => {
   activeId.value = null
   turns.value = []
   globalError.value = ''
+  approvalPending.value = false
   await refresh()
 }
 
@@ -89,11 +94,14 @@ const select = async (id: number) => {
   activeId.value = id
   sidebarOpen.value = false
   turns.value = []
+  approvalPending.value = false
   try {
     const history: TurnRecord[] = await getTurns(id)
     // 回放与实时流式共用 turn.ts 的分区/合并/错误渲染规则
     turns.value = history.map(turnFromRecord)
     await scrollToBottom(true)
+    // 刷新恢复：挂起轮回放为 waitingApproval，卡片数据经 GET /approvals 补齐（与 409 同路径）
+    if (history.some((t) => t.status === 'WAITING_APPROVAL')) await restorePending(id)
   } catch (err) {
     if (err instanceof ApiError && err.notFound) {
       globalError.value = '该会话不存在或无权访问，已自动移除'
@@ -101,6 +109,59 @@ const select = async (id: number) => {
     } else if (!authFailed(err)) {
       throw err
     }
+  }
+}
+
+/**
+ * 挂起审批恢复（409 挡回与刷新回放共用）：GET pending → 按 turnId 定位挂起轮，
+ * 补齐卡片数据并置横幅；无挂起（他端已决议）则无感收场。
+ */
+const restorePending = async (convId: number) => {
+  try {
+    const pending = await getPendingApproval(convId)
+    if (!pending) return
+    const target = turns.value.find((t) => t.id === pending.turnId)
+    if (!target) return
+    target.approval = pending
+    target.status = 'waitingApproval'
+    approvalPending.value = true
+    await scrollToBottom(true)
+  } catch (err) {
+    authFailed(err) // 恢复失败不打断聊天主流程（401 走全局横幅）
+  }
+}
+
+/** 审批决议提交：POST approvals → 返回的 resume SSE 流喂同一 applySseEvent 合并进原轮次 */
+const submitApproval = async (turn: ChatTurn, payload: ApprovalDecisionPayload) => {
+  if (!activeId.value || sending.value) return
+  // 捕获提交时刻的会话 id（与 send 同因：流式期间可能切换会话）
+  const convId = activeId.value
+  sending.value = true
+  // 卡片即时收起进入续跑流式；applySseEvent 收到首事件亦会流转（双保险）
+  turn.status = 'streaming'
+  try {
+    await streamSse(`/api/conversations/${convId}/approvals`, payload, (ev) => {
+      applySseEvent(turn, ev)
+    })
+    if (turn.status === 'streaming') turn.status = 'done'
+    approvalPending.value = false
+    refresh()
+  } catch (err) {
+    if (err instanceof ApiError && err.notFound) {
+      failTurn(turn, new Error(CONV_UNAVAILABLE))
+      globalError.value = CONV_UNAVAILABLE
+      dropConversation(convId)
+      await refresh()
+    } else {
+      authFailed(err)
+      failTurn(turn, err)
+      if (err instanceof ApiError && err.conflict) {
+        // 重复提交/竞态：回落 GET pending，挂起仍在则重渲染卡片
+        await restorePending(convId)
+      }
+    }
+  } finally {
+    sending.value = false
   }
 }
 
@@ -124,8 +185,14 @@ const send = async () => {
     refresh()
   } catch (err) {
     // 网络失败（fetch reject / HTTP 非 2xx）：收口为 error 并展示错误文本，
-    // 轮次不再卡在 streaming；404/401 走无感分支
-    if (err instanceof ApiError && err.notFound) {
+    // 轮次不再卡在 streaming；404/401/409 走无感分支
+    if (err instanceof ApiError && err.conflict) {
+      // 审批挂起挡回（后端兜底，spec：不锁输入框）：撤回乐观轮、还原输入、
+      // 横幅提示并拉 GET /approvals 渲染卡片（与刷新恢复同路径）
+      turns.value = turns.value.filter((t) => t !== turn)
+      input.value = text
+      await restorePending(convId)
+    } else if (err instanceof ApiError && err.notFound) {
       failTurn(turn, new Error(CONV_UNAVAILABLE))
       globalError.value = CONV_UNAVAILABLE
       dropConversation(convId)
@@ -200,6 +267,10 @@ onMounted(async () => {
       <div class="global-error" v-if="globalError" @click="globalError = ''">
         {{ globalError }}（点击关闭）
       </div>
+      <!-- 审批挂起横幅：409 挡回 / 刷新恢复置位，决议完成自动消解 -->
+      <div class="approval-banner" v-if="approvalPending" @click="approvalPending = false">
+        有待审批操作，请先处理（点击关闭）
+      </div>
       <div class="timeline" ref="timelineEl">
         <!-- 空会话欢迎面板 -->
         <div v-if="turns.length === 0" class="welcome">
@@ -220,9 +291,12 @@ onMounted(async () => {
         <!-- 每轮 = 一条作业轨道：用户气泡 → (思考/工具…沿轨线) → 答案 -->
         <article v-for="(turn, i) in turns" :key="i" class="turn">
           <MessageBubble role="user" :content="turn.userText" v-if="turn.userText" />
-          <div class="rail" v-if="turn.thinking || turn.tools.length || turn.text || turn.errorText">
+          <div class="rail" v-if="turn.thinking || turn.tools.length || turn.text || turn.errorText || turn.approval">
             <ThinkingBlock :content="turn.thinking" :streaming="thinkingActive(turn)" v-if="turn.thinking" />
             <ToolCard v-for="t in turn.tools" :key="t.callId" :tool="t" />
+            <ApprovalCard v-if="turn.status === 'waitingApproval' && turn.approval"
+                          :turn-id="turn.approval.turnId" :items="turn.approval.items"
+                          @submit="submitApproval(turn, $event)" />
             <MessageBubble role="assistant" :content="turn.text"
                            :streaming="turn.status === 'streaming' && !!turn.text" v-if="turn.text" />
             <p class="error-line" v-if="turn.errorText">{{ turn.errorText }}</p>
@@ -374,6 +448,17 @@ onMounted(async () => {
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 13px;
+  cursor: pointer;
+}
+
+.approval-banner {
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--pine-soft);
+  color: var(--pine-deep);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
