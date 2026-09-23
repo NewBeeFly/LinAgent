@@ -217,3 +217,24 @@ describe('thinkingActive（思考折叠块展开态）', () => {
     expect(thinkingActive(failed)).toBe(false)
   })
 })
+
+describe('batchRememberLevel（审批整批 remember 档位，min 语义）', () => {
+  it('任一普通批准 → once：同批「永久允许」不得把「批准」项静默升级成 forever 规则', async () => {
+    const { batchRememberLevel } = await import('../turn')
+    expect(batchRememberLevel(['approve', 'forever'])).toBe('once')
+    expect(batchRememberLevel(['session', 'approve'])).toBe('once')
+    expect(batchRememberLevel(['reject', 'approve', 'session', 'forever'])).toBe('once')
+  })
+
+  it('无普通批准、任一会话 → session', async () => {
+    const { batchRememberLevel } = await import('../turn')
+    expect(batchRememberLevel(['session', 'forever'])).toBe('session')
+    expect(batchRememberLevel(['reject', 'session'])).toBe('session')
+  })
+
+  it('全会话以上 → forever；reject 不参与记忆，全拒批时档位值无实际写入', async () => {
+    const { batchRememberLevel } = await import('../turn')
+    expect(batchRememberLevel(['forever', 'forever'])).toBe('forever')
+    expect(batchRememberLevel(['reject'])).toBe('forever') // 后端仅对 approve 项写规则，无副作用
+  })
+})

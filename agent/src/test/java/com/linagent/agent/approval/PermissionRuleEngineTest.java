@@ -192,12 +192,15 @@ class PermissionRuleEngineTest {
         }
     }
 
-    // ── 8. suggestPattern 三分支：命令前 2 非选项 token + " *"；单 token → '*'；write_file 路径父目录 + "/*" ──
+    // ── 8. suggestPattern 三分支：命令前 2 非选项 token + " *"；单 token → 精确命令；write_file 路径父目录 + "/*" ──
     @Test
     void suggestPatternCoversThreeBranches() {
         assertThat(PermissionRuleEngine.suggestPattern("shell", "pip install pandas"))
                 .isEqualTo("pip install *");
-        assertThat(PermissionRuleEngine.suggestPattern("shell", "ls")).isEqualTo("*");
+        // 终审 I3：单 token 命令建议精确匹配自身（不再放成工具级 '*'——suggestedRule
+        // 前端只读不可收窄，'*' 等于永久放开整个 shell 工具）
+        assertThat(PermissionRuleEngine.suggestPattern("shell", "ls")).isEqualTo("ls");
+        assertThat(PermissionRuleEngine.suggestPattern("shell", "docker")).isEqualTo("docker");
         assertThat(PermissionRuleEngine.suggestPattern("write_file", "reports/a.csv"))
                 .isEqualTo("reports/*");
         // 选项 token 跳过
@@ -205,8 +208,27 @@ class PermissionRuleEngineTest {
                 .isEqualTo("pip install *");
         assertThat(PermissionRuleEngine.suggestPattern("shell", "git push --force origin main"))
                 .isEqualTo("git push *");
-        // 根级文件无父目录 → 工具级 '*'
-        assertThat(PermissionRuleEngine.suggestPattern("write_file", "a.csv")).isEqualTo("*");
+        // 根级文件无父目录 → 精确到该文件本身（'*' 会放开全部 write_file 路径）
+        assertThat(PermissionRuleEngine.suggestPattern("write_file", "a.csv")).isEqualTo("a.csv");
+        // 全选项 token 无锚点 → 维持 '*'（无法收窄的兜底，纯选项命令罕见）
+        assertThat(PermissionRuleEngine.suggestPattern("shell", "--force")).isEqualTo("*");
+    }
+
+    /** 终审 I3 闭环：按收窄后的建议规则落 user 规则，同命令/同文件不再审批（equals 命中） */
+    @Test
+    void narrowedSuggestedRuleRoundsBackToExactAllow() {
+        var denied = engine(List.of()).evaluate("shell", "call-1", "docker", CTX);
+        assertThat(denied.items().get(0).suggestedRule()).isEqualTo("docker");
+        assertThat(engine(List.of(userAllow("shell", denied.items().get(0).suggestedRule())))
+                .evaluate("shell", "c1", "docker", CTX).needsApproval()).isFalse();
+
+        var deniedFile = engine(List.of()).evaluate("write_file", "call-2", "a.csv", CTX);
+        assertThat(deniedFile.items().get(0).suggestedRule()).isEqualTo("a.csv");
+        assertThat(engine(List.of(userAllow("write_file", deniedFile.items().get(0).suggestedRule())))
+                .evaluate("write_file", "c2", "a.csv", CTX).needsApproval()).isFalse();
+        // 精确文件规则不外溢：同目录其它文件仍需审批
+        assertThat(engine(List.of(userAllow("write_file", "a.csv")))
+                .evaluate("write_file", "c2", "b.csv", CTX).needsApproval()).isTrue();
     }
 
     // ── 9. 空命令/空白 payload 边界 ──
@@ -285,6 +307,55 @@ class PermissionRuleEngineTest {
         assertThat(engine.evaluate("shell", "c1", "find . -type f -execdir rm {} ;", CTX).needsApproval()).isTrue();
         // 纯查询 find 仍白名单
         assertThat(engine.evaluate("shell", "c1", "find . -name x", CTX).needsApproval()).isFalse();
+    }
+
+    /** 终审 C3：find 写结果旗标（-fprint/-fprintf/-fls）与 git diff --output 同为写副作用，
+     *  零规则下不得经白名单自动放行 */
+    @Test
+    void findWriteResultFlagsAndGitDiffOutputLoseBuiltinEligibility() {
+        PermissionRuleEngine engine = engine(List.of());
+
+        assertThat(engine.evaluate("shell", "c1", "find . -fprint /tmp/evil", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "find . -fprintf /tmp/x %p", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "find . -fls /tmp/x", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "git diff --output=/tmp/evil", CTX).needsApproval()).isTrue();
+        // 无旗标的原命令仍白名单（fail-safe 只砍写副作用形态）
+        assertThat(engine.evaluate("shell", "c1", "git diff", CTX).needsApproval()).isFalse();
+    }
+
+    /**
+     * 终审 C1+C2：换行（\n/\r）与单 & 是 bash 命令分隔/链算符，必须参与拆段——
+     * 否则 "ls\nrm -rf /" 整段以 "ls" 前缀命中白名单自动放行。
+     */
+    @Test
+    void newlineAndSingleAmpersandAreTreatedAsSeparators() {
+        PermissionRuleEngine engine = engine(List.of());
+
+        // \n：拆段后 ls 段 BUILTIN、rm 段待审批 → 整体需审批
+        var lf = engine.evaluate("shell", "c1", "ls\nrm -rf /Users/x", CTX);
+        assertThat(lf.needsApproval()).isTrue();
+        assertThat(lf.items().get(0).subVerdicts()).containsExactly(
+                new SubVerdict("ls", true, "BUILTIN"),
+                new SubVerdict("rm -rf /Users/x", false, null));
+
+        // \r 变体同判
+        assertThat(engine.evaluate("shell", "c1", "ls\rrm -rf /Users/x", CTX).needsApproval()).isTrue();
+
+        // 单 & 链算符：两段各自判定，rm 段不放行
+        assertThat(engine.evaluate("shell", "c1", "ls & rm -rf /tmp/x", CTX).needsApproval()).isTrue();
+
+        // 全部段均白名单的换行/单 & 复合仍放行（不因新分隔符误伤只读命令）
+        assertThat(engine.evaluate("shell", "c1", "ls\ncat a.txt", CTX).needsApproval()).isFalse();
+        assertThat(engine.evaluate("shell", "c1", "git status & git log", CTX).needsApproval()).isFalse();
+        // && 仍按双字符整体拆（不因新增单 & 拆出孤段）
+        assertThat(engine.evaluate("shell", "c1", "ls && rm -rf /", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "ls && cat a.txt", CTX).needsApproval()).isFalse();
+
+        // session 规则层同判：规则只覆盖首段时，换行携带的第二段仍待审批
+        MapSessionRules session = new MapSessionRules();
+        session.add("default", "linmj", 42L, "shell", "pip install *");
+        assertThat(new PermissionRuleEngine(List.of(), session)
+                .evaluate("shell", "c1", "pip install x\nrm -rf ~", CTX).needsApproval()).isTrue();
     }
 
     // ── 14. 危险语法是「失去白名单」而非硬 deny：显式 session/user 规则仍可放行 ──

@@ -77,3 +77,20 @@ function applyMessageRecord(turn: ChatTurn, m: MessageRecord): void {
 function errorTextOf(data: any): string {
   return data?.message ?? data?.code ?? '未知错误'
 }
+
+// ---- 审批决议 payload 纯逻辑（ApprovalCard 组装侧共用） ----
+
+/** 审批逐项选择（ApprovalCard 四动作）；'approve' = 普通批准（不记忆规则） */
+export type ApprovalChoice = 'approve' | 'reject' | 'session' | 'forever'
+
+/**
+ * 整批 remember 档位取最弱（min 语义，宁可少记不可多记，终审 I2）：后端 DTO 的
+ * remember 是整批单值——任一普通批准 → once（否则该单项会被静默升级成会话/永久
+ * 规则）；否则任一会话 → session；否则 forever。reject 项不参与记忆（后端仅对
+ * approve 项写规则），全拒批时档位值无实际写入。
+ */
+export function batchRememberLevel(choices: readonly ApprovalChoice[]): 'once' | 'session' | 'forever' {
+  if (choices.includes('approve')) return 'once'
+  if (choices.includes('session')) return 'session'
+  return 'forever'
+}

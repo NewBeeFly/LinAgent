@@ -42,6 +42,7 @@ import static org.mockito.Mockito.when;
 class AgentFacadeTest {
 
     private AgentFacade facade;
+    private AgentFactory factory;
     private InMemoryConversationRepository conversations;
     private InMemoryTurnRepository turns;
     private InMemoryMessageRepository messages;
@@ -65,7 +66,7 @@ class AgentFacadeTest {
         // 默认喂一份真实捕获形态的 usage（终审 Important 2：收尾落 turn.usage）
         stubUsage = usage(10, 20, 30);
 
-        AgentFactory factory = mock(AgentFactory.class);
+        factory = mock(AgentFactory.class);
         when(factory.create(any(), any(), any(), any(), any())).thenAnswer(inv -> {
             // create(ctx, conversationId, thinkingSink, usageCapture, toolInterceptor)
             capturedSink = inv.getArgument(2);
@@ -390,6 +391,47 @@ class AgentFacadeTest {
         assertThat(capturedAgent).isNull(); // 抛出先于 agent 构建
     }
 
+    /**
+     * 终审 I1：并发双决议占轮裁决——两个并发 POST 同时通过 pending 预检时，
+     * 第一个 resume 原子占轮（claim 返回 1，turn 即刻 WAITING→RUNNING，不依赖订阅），
+     * 第二个 resume 定位等待轮已落空 → 同步 ApprovalConflictException（web 映射 409），
+     * 不再从同一 checkpoint 双恢复（已批准工具会执行两次）。
+     */
+    @Test
+    void resumeLosingConcurrentClaimThrowsConflictBeforeStreaming() {
+        Conversation conv = conversations.seed(null);
+        turns.save(new Turn(null, conv.id(), 1, "WAITING_APPROVAL", null, null, Instant.now(), null));
+
+        // 赢者：占轮成功（同步段即生效，订阅与否不影响门闸语义）
+        facade.resume(conv.id(), approveAllFeedback());
+        assertThat(turns.data.get(0).status()).isEqualTo("RUNNING");
+
+        // 输者：同一等待轮已被占走 → 409 语义异常，且不触碰 agent
+        assertThatThrownBy(() -> facade.resume(conv.id(), approveAllFeedback()))
+            .isInstanceOf(ApprovalConflictException.class);
+        assertThat(capturedAgent).isNull();
+    }
+
+    /** 紧并发窗口（终审 I1）：两个 findTop 都读到 WAITING（赢者 claim 尚未提交）时，
+     *  输者的 claim 原子落空（返回 0）→ 独立的 409 语义分支 */
+    @Test
+    void resumeClaimReturningZeroThrowsConflict() {
+        Conversation conv = conversations.seed(null);
+        Turn waiting = turns.save(
+            new Turn(null, conv.id(), 1, "WAITING_APPROVAL", null, null, Instant.now(), null));
+
+        TurnRepository racingTurns = mock(TurnRepository.class);
+        when(racingTurns.findTopByConversationIdAndStatusOrderBySeqDesc(conv.id(), "WAITING_APPROVAL"))
+            .thenReturn(Optional.of(waiting));
+        when(racingTurns.claimWaitingTurn(waiting.id())).thenReturn(0);
+        AgentFacade racingFacade = new AgentFacade(factory, conversations, racingTurns, messages, "step-3.7-flash");
+
+        assertThatThrownBy(() -> racingFacade.resume(conv.id(), approveAllFeedback()))
+            .isInstanceOf(ApprovalConflictException.class)
+            .hasMessageContaining("并发决议抢占");
+        assertThat(capturedAgent).isNull();
+    }
+
     /** resume 复用等待轮：WAITING_APPROVAL → RUNNING → COMPLETED，不新建 turn/USER 行，
      *  展示层 seq 从既有最大 seq 续接，图输入为 Map.of()（spike 结论 B，绝不传 UserMessage） */
     @Test
@@ -615,6 +657,18 @@ class AgentFacadeTest {
             return data.stream().filter(t -> t.conversationId().equals(conversationId)
                     && status.equals(t.status()))
                 .max(java.util.Comparator.comparing(Turn::seq));
+        }
+        /** CAS 语义与 SQL 版一致：仅当 status=WAITING_APPROVAL 时置 RUNNING，返回受影响行数 */
+        @Override public int claimWaitingTurn(Long id) {
+            for (int i = 0; i < data.size(); i++) {
+                Turn t = data.get(i);
+                if (t.id().equals(id) && "WAITING_APPROVAL".equals(t.status())) {
+                    data.set(i, new Turn(t.id(), t.conversationId(), t.seq(), "RUNNING",
+                        t.finishReason(), t.usage(), t.startedAt(), t.finishedAt()));
+                    return 1;
+                }
+            }
+            return 0;
         }
     }
 

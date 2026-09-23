@@ -37,15 +37,22 @@ public class PermissionRuleEngine {
     private static final String SHELL = "shell";
     private static final String WRITE_FILE = "write_file";
 
-    /** 复合命令分隔符：&& / || / ; / |（spec §5 固定清单，不含重定向与命令替换） */
-    private static final Pattern SEPARATOR = Pattern.compile("&&|\\|\\||;|\\|");
+    /**
+     * 复合命令分隔符：&& / || / ; / | / 换行(\n \r) / 单 &（终审 C1+C2：bash 把换行与
+     * 单 & 同样视为命令分隔/链算符，缺一则可经 {@code ls\nrm -rf /} 或 {@code ls & rm -rf /}
+     * 携带未审批段绕过）。多字符候选择先（&& 先于 &、|| 先于 |），避免把 && 拆出孤 & 段。
+     */
+    private static final Pattern SEPARATOR = Pattern.compile("&&|\\|\\||;|\\||\\n|\\r|&");
 
     /**
-     * 白名单失效语法（T3 评审安全加固裁定）：重定向（&gt; &lt; 含 &gt;&gt;）、命令替换（$() / 反引号）、
-     * find 的 -delete / -exec(-execdir) 家族。含任一即失去 BUILTIN 资格——落 session/user 规则，
-     * 无命中 → NEEDS_APPROVAL（fail-safe：宁可多一次审批，不放行带副作用的"只读"命令）。
+     * 白名单失效语法（T3 评审安全加固 + 终审 C3）：重定向（&gt; &lt; 含 &gt;&gt;）、命令替换
+     * （$() / 反引号）、find 的写副作用选项家族（-delete / -exec(-execdir) / -fprint* /
+     * -fprintf / -fls），以及 {@code --output} 落盘旗标（git diff --output=...）。含任一即
+     * 失去 BUILTIN 资格——落 session/user 规则，无命中 → NEEDS_APPROVAL（fail-safe：
+     * 宁可多一次审批，不放行带副作用的"只读"命令）。
      */
-    private static final Pattern FIND_DANGEROUS_OPTION = Pattern.compile("\\bfind\\b.*\\s-(delete|exec\\w*)");
+    private static final Pattern FIND_DANGEROUS_OPTION =
+            Pattern.compile("\\bfind\\b.*\\s-(delete|exec\\w*|fls|fprintf|fprint\\w*)");
 
     private final List<PermissionRule> userRules;
     private final SessionRules sessionRules;
@@ -107,10 +114,15 @@ public class PermissionRuleEngine {
         return new SubVerdict(segment, false, null);
     }
 
-    /** 白名单失效语法探测：重定向 / 命令替换 / find -delete|-exec（见 {@link #FIND_DANGEROUS_OPTION}） */
+    /**
+     * 白名单失效语法探测：重定向 / 命令替换 / find 写副作用选项（见
+     * {@link #FIND_DANGEROUS_OPTION}）/ {@code --output} 落盘旗标（git diff --output=...；
+     * 对其它工具带同名旗标属 fail-safe 过度收敛，宁可多一次审批）。
+     */
     private static boolean losesBuiltinEligibility(String segment) {
         return segment.contains(">") || segment.contains("<") || segment.contains("$(")
-                || segment.contains("`") || FIND_DANGEROUS_OPTION.matcher(segment).find();
+                || segment.contains("`") || segment.contains("--output")
+                || FIND_DANGEROUS_OPTION.matcher(segment).find();
     }
 
     /** pattern 匹配：'*' 工具级；write_file 路径前缀（'/*' 尾缀，边界 '/'）；其余命令段前缀（' *' 尾缀，边界空白/结尾） */
@@ -138,7 +150,7 @@ public class PermissionRuleEngine {
                     && Character.isWhitespace(command.charAt(prefix.length())));
     }
 
-    /** 按 && / || / ; / | 拆子命令并去空白段（空段不参与判定，真实段照常） */
+    /** 按 && / || / ; / | / 换行 / 单 & 拆子命令并去空白段（空段不参与判定，真实段照常） */
     private static List<String> splitSegments(String payload) {
         List<String> segments = new ArrayList<>();
         for (String part : SEPARATOR.split(payload)) {
@@ -158,14 +170,19 @@ public class PermissionRuleEngine {
         return new Verdict(true, List.of(item));
     }
 
-    /** 建议规则：命令取前 2 个非选项 token + " *"；不足 2 个 → 工具级 '*'；write_file 取父目录 + "/*"（根级文件无父目录 → '*'） */
+    /**
+     * 建议规则（终审 I3 收窄：suggestedRule 前端只读不可改，宁窄勿宽）：
+     * 命令取前 2 个非选项 token + " *"；单 token → 精确匹配该命令（equals 语义 matches 已支持，
+     * 不再放成工具级 '*'）；全选项 token 无锚点 → 才退 '*'；write_file 取父目录 + "/*"，
+     * 根级文件无父目录 → 精确到该文件本身。
+     */
     public static String suggestPattern(String toolName, String payload) {
         if (payload == null || payload.isBlank()) {
             return "*";
         }
         if (WRITE_FILE.equals(toolName)) {
             int slash = payload.lastIndexOf('/');
-            return slash <= 0 ? "*" : payload.substring(0, slash) + "/*";
+            return slash <= 0 ? payload : payload.substring(0, slash) + "/*";
         }
         List<String> tokens = new ArrayList<>();
         for (String token : payload.trim().split("\\s+")) {
@@ -177,7 +194,10 @@ public class PermissionRuleEngine {
                 break;
             }
         }
-        return tokens.size() < 2 ? "*" : String.join(" ", tokens) + " *";
+        if (tokens.size() < 2) {
+            return tokens.isEmpty() ? "*" : tokens.get(0);
+        }
+        return String.join(" ", tokens) + " *";
     }
 
     // —— 产出类型（Task 4/5/6 消费，签名与 task brief 逐字一致）——

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue'
+import { batchRememberLevel, type ApprovalChoice } from '../turn'
 import type { ApprovalDecisionPayload, ApprovalItem } from '../types'
 
 /**
@@ -12,18 +13,14 @@ const props = defineProps<{ turnId: number; items: ApprovalItem[] }>()
 const emit = defineEmits<{ submit: [payload: ApprovalDecisionPayload] }>()
 
 // 逐项选择，默认全部批准；拒绝展开理由输入，永久允许展示 suggestedRule 预览
-type Choice = 'approve' | 'reject' | 'session' | 'forever'
-const choices = reactive<Record<string, Choice>>(
-  Object.fromEntries(props.items.map((i) => [i.callId, 'approve' as Choice])))
+const choices = reactive<Record<string, ApprovalChoice>>(
+  Object.fromEntries(props.items.map((i) => [i.callId, 'approve' as ApprovalChoice])))
 const reasons = reactive<Record<string, string>>({})
 
-// remember 为整批档位（后端 DTO 语义）：任一永久 → forever，任一会话 → session，否则 once
-const remember = computed<'once' | 'session' | 'forever'>(() => {
-  const picked = props.items.map((i) => choices[i.callId])
-  if (picked.includes('forever')) return 'forever'
-  if (picked.includes('session')) return 'session'
-  return 'once'
-})
+// remember 为整批档位（后端 DTO 语义），取最弱档（min：宁可少记不可多记，终审 I2）——
+// 任一普通批准即 once，防止单项「批准」被同批的「永久允许」静默升级成 forever 规则
+const remember = computed<'once' | 'session' | 'forever'>(() =>
+  batchRememberLevel(props.items.map((i) => choices[i.callId])))
 
 const submit = () => {
   emit('submit', {
@@ -38,7 +35,7 @@ const submit = () => {
   })
 }
 
-const setAll = (choice: Choice) => {
+const setAll = (choice: ApprovalChoice) => {
   for (const i of props.items) choices[i.callId] = choice
 }
 

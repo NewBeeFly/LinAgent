@@ -43,6 +43,9 @@ class ConversationControllerTest {
     @MockBean MessageRepository messages;
     @MockBean com.linagent.agent.persistence.repository.PermissionRuleRepository permissionRules;
     @MockBean CheckpointCleaner checkpointCleaner;
+    /** 会话删除级联清 session 审批规则（终审 M1）：InMemorySessionRules 为 @Component，
+     *  不在 @WebMvcTest 切片内，构造器注入需要须 @MockBean */
+    @MockBean com.linagent.agent.approval.InMemorySessionRules sessionRules;
     /** 鉴权链（Task 3）：@WebMvcTest 自动装配 AuthContextFilter，RequestAuthenticator
      *  不在切片内须 @MockBean 打桩（MockMvc 无 defaultHeaders，请求统一带 authHeaders） */
     @MockBean RequestAuthenticator authenticator;
@@ -156,9 +159,11 @@ class ConversationControllerTest {
         mockMvc.perform(delete("/api/conversations/1").headers(authHeaders))
             .andExpect(status().isNoContent());
 
-        // checkpoint 级联清理（Errata 3）：按会话 id 清 conv-1 / conv-1-v* 线程，且先于会话行删除
-        org.mockito.InOrder order = org.mockito.Mockito.inOrder(checkpointCleaner, conversations);
+        // checkpoint 级联清理（Errata 3）：按会话 id 清 conv-1 / conv-1-v* 线程，且先于会话行删除；
+        // session 审批规则同步清出内存（终审 M1，同随会话删除收尾）
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(checkpointCleaner, sessionRules, conversations);
         order.verify(checkpointCleaner).deleteByConversationId(1L);
+        order.verify(sessionRules).evict(1L);
         order.verify(conversations).deleteById(1L);
     }
 

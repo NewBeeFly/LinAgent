@@ -262,6 +262,28 @@ class ApprovalControllerTest {
         verify(permissionRules, never()).save(any());
     }
 
+    /** 终审 I1：并发双决议占轮——输者在 facade.resume 的 claimWaitingTurn 落空抛
+     *  ApprovalConflictException → 确定性 409（赢者独占续跑，工具不双执行） */
+    @Test
+    void decideWhenConcurrentClaimLosesReturns409() {
+        stubPendingToolCall();
+        when(agentFacade.resume(eq(CONV_ID), any()))
+            .thenThrow(new com.linagent.agent.facade.ApprovalConflictException(
+                CONV_ID, "审批轮已被并发决议抢占，请刷新后重试: " + CONV_ID));
+
+        webTestClient.post().uri("/api/conversations/1/approvals")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""
+                {"items":[{"callId":"call-1","decision":"approve"}],"remember":"once"}
+                """)
+            .exchange()
+            .expectStatus().isEqualTo(409)
+            .expectBody(Map.class).value(body -> {
+                assertThat(body.get("conversationId")).isEqualTo(1);
+                assertThat((String) body.get("message")).contains("并发决议抢占");
+            });
+    }
+
     @Test
     void decideWithInvalidRememberOrDecisionReturns400() {
         stubPendingToolCall();

@@ -38,6 +38,8 @@ class AuthContextFilterTest {
     @MockBean com.linagent.agent.persistence.repository.MessageRepository messages;
     @MockBean com.linagent.agent.persistence.repository.PermissionRuleRepository permissionRules;
     @MockBean com.linagent.agent.persistence.support.CheckpointCleaner checkpointCleaner;
+    /** 会话删除级联清 session 规则（终审 M1）：ConversationController 构造器注入新增依赖 */
+    @MockBean com.linagent.agent.approval.InMemorySessionRules sessionRules;
     @MockBean com.linagent.agent.facade.AgentFacade agentFacade;
 
     @BeforeEach

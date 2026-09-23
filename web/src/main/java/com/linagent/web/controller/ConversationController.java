@@ -1,5 +1,6 @@
 package com.linagent.web.controller;
 
+import com.linagent.agent.approval.InMemorySessionRules;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.agent.persistence.support.CheckpointCleaner;
@@ -24,14 +25,17 @@ public class ConversationController {
     private final TurnRepository turns;
     private final MessageRepository messages;
     private final CheckpointCleaner checkpointCleaner;
+    private final InMemorySessionRules sessionRules;
 
     public ConversationController(ConversationRepository conversations,
                                   TurnRepository turns, MessageRepository messages,
-                                  CheckpointCleaner checkpointCleaner) {
+                                  CheckpointCleaner checkpointCleaner,
+                                  InMemorySessionRules sessionRules) {
         this.conversations = conversations;
         this.turns = turns;
         this.messages = messages;
         this.checkpointCleaner = checkpointCleaner;
+        this.sessionRules = sessionRules;
     }
 
     @PostMapping
@@ -78,10 +82,12 @@ public class ConversationController {
         AuthContext ctx = AuthContextHolder.require();
         // 非属主/不存在统一 404（不泄漏存在性）；级联删除：turn/message 由 PG 外键
         // ON DELETE CASCADE 承担；checkpoint（graphthread/graphcheckpoint）由
-        // CheckpointCleaner 按 threadId 模式清理。先清 checkpoint 再删会话行：
-        // 中途失败时重试安全（会话仍在，幂等清理）。
+        // CheckpointCleaner 按 threadId 模式清理；本会话的 session 审批规则由
+        // sessionRules.evict 清出内存（终审 M1，与 InMemorySessionRules javadoc 对齐）。
+        // 先清 checkpoint/session 规则再删会话行：中途失败时重试安全（幂等清理）。
         conversations.requireOwned(id, ctx.tenantId(), ctx.userId());
         checkpointCleaner.deleteByConversationId(id);
+        sessionRules.evict(id);
         conversations.deleteById(id);
     }
 }

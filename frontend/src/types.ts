@@ -79,7 +79,8 @@ export interface ApprovalItemDecision {
   reason?: string
 }
 
-/** POST /approvals 请求体：remember 为整批档位（forever > session > once） */
+/** POST /approvals 请求体：remember 为整批档位，强度 forever &gt; session &gt; once
+ *  （前端取最弱档：任一普通批准即 once，宁可少记不可多记） */
 export interface ApprovalDecisionPayload {
   items: ApprovalItemDecision[]
   remember: 'once' | 'session' | 'forever'

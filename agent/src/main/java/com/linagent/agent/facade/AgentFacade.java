@@ -21,6 +21,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Sinks;
@@ -107,26 +108,36 @@ public class AgentFacade {
      * 审批决议续跑（Task 6，spike 结论 B）：同 threadId + HUMAN_FEEDBACK metadata +
      * stream(Map.of(), config)——从最新 checkpoint 的 HITL 节点继续，绝不传 UserMessage
      * （幻影消息乱序污染历史）。复用等待轮（不新建 turn/USER 行），展示层 seq 从既有
-     * 最大 seq 续接；WAITING_APPROVAL → RUNNING 后走与 chat 相同的事件管线，续跑再次
-     * 中断则再发 ApprovalRequest（递归语义），正常收口发 TurnDone。
+     * 最大 seq 续接；占轮即把 WAITING_APPROVAL → RUNNING，续跑再次中断则再发
+     * ApprovalRequest（递归语义），正常收口发 TurnDone。
      *
      * <p>无等待轮同步抛 {@link ApprovalConflictException}（重复提交/竞态，web 映射 409），
-     * 先于 SSE 建流。
+     * 先于 SSE 建流。并发双决议由 {@code claimWaitingTurn} 原子占轮裁决：两个并发 POST
+     * 同时通过 pending 预检时仅一个 claim 成功（终审 I1），输者同步 409——防同一
+     * checkpoint 双恢复导致已批准工具执行两次。
+     *
+     * <p>@Transactional 为 {@code claimWaitingTurn} 的 @Modifying 提供事务（提交点在方法
+     * 返回、defer 订阅之前，续跑管线内的落库仍各自独立提交，不受本事务影响）。
      */
+    @Transactional
     public Flux<AgentEvent> resume(Long conversationId, InterruptionMetadata feedback) {
         AuthContext ctx = AuthContextHolder.require();
         conversations.requireOwned(conversationId, ctx.tenantId(), ctx.userId());
-        // 决议前置校验（控制器已按 409 挡重复提交，此处兜底真并发竞态）
-        turns.findTopByConversationIdAndStatusOrderBySeqDesc(conversationId, "WAITING_APPROVAL")
+        // 决议前置校验 + 并发占轮（终审 I1）：findTop 定位等待轮后以
+        // UPDATE ... WHERE status='WAITING_APPROVAL' 原子抢占——claim 返回 0 =
+        // 并发决议已先恢复（或等待轮已被 CANCEL 收口）→ 409
+        Turn waiting = turns.findTopByConversationIdAndStatusOrderBySeqDesc(conversationId, "WAITING_APPROVAL")
             .orElseThrow(() -> new ApprovalConflictException(
                 conversationId, "会话无待审批轮次可恢复（重复提交或已决议）: " + conversationId));
+        if (turns.claimWaitingTurn(waiting.id()) == 0) {
+            throw new ApprovalConflictException(
+                conversationId, "审批轮已被并发决议抢占，请刷新后重试: " + conversationId);
+        }
         return Flux.defer(() -> {
             Conversation conv = conversations.findById(conversationId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + conversationId));
-            Turn turn = turns.findTopByConversationIdAndStatusOrderBySeqDesc(conversationId, "WAITING_APPROVAL")
-                .orElseThrow(() -> new ApprovalConflictException(
-                    conversationId, "会话无待审批轮次可恢复（重复提交或已决议）: " + conversationId));
-            turn = turns.save(turn.resumed());
+            // 占轮已置 RUNNING；resumed() 复写运行时字段语义（finish/finishedAt 清空）
+            Turn turn = turns.save(waiting.resumed());
 
             // 展示层 seq 续接：中断前已落行（USER/TEXT/TOOL_CALL...）之后继续
             List<Message> existing = messages.findByTurnIdOrderBySeq(turn.id());
