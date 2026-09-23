@@ -44,6 +44,7 @@ class ChatControllerSseTest {
     @MockBean ConversationRepository conversations;
     @MockBean TurnRepository turns;
     @MockBean MessageRepository messages;
+    @MockBean com.linagent.agent.persistence.repository.PermissionRuleRepository permissionRules;
     /** 鉴权链（Task 3）：@WebMvcTest 自动装配 Filter 类型 Bean（AuthContextFilter），
      *  RequestAuthenticator 不在切片内须 @MockBean 打桩，否则上下文起不来/请求 401 */
     @MockBean RequestAuthenticator authenticator;

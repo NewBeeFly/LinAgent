@@ -41,6 +41,7 @@ class ConversationControllerTest {
     @MockBean ConversationRepository conversations;
     @MockBean TurnRepository turns;
     @MockBean MessageRepository messages;
+    @MockBean com.linagent.agent.persistence.repository.PermissionRuleRepository permissionRules;
     @MockBean CheckpointCleaner checkpointCleaner;
     /** 鉴权链（Task 3）：@WebMvcTest 自动装配 AuthContextFilter，RequestAuthenticator
      *  不在切片内须 @MockBean 打桩（MockMvc 无 defaultHeaders，请求统一带 authHeaders） */

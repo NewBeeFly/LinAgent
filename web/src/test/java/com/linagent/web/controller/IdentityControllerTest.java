@@ -34,6 +34,7 @@ class IdentityControllerTest {
     @MockBean com.linagent.agent.persistence.repository.ConversationRepository conversations;
     @MockBean com.linagent.agent.persistence.repository.TurnRepository turns;
     @MockBean com.linagent.agent.persistence.repository.MessageRepository messages;
+    @MockBean com.linagent.agent.persistence.repository.PermissionRuleRepository permissionRules;
     @MockBean com.linagent.agent.persistence.support.CheckpointCleaner checkpointCleaner;
     @MockBean com.linagent.agent.facade.AgentFacade agentFacade;
 
