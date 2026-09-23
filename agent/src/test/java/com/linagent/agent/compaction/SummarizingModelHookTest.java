@@ -276,4 +276,57 @@ class SummarizingModelHookTest {
         assertThat((int) received.get(0).get(2)).isEqualTo(60);   // 摘要前 60 条
         assertThat((int) received.get(0).get(3)).isEqualTo(42);   // 摘要后 1+1+40（保留区 msgs[20..60)）
     }
+
+    // ===== 迭代二：幂等守卫 / ratio 派生阈值 / 摘要限思考 =====
+
+    @Test
+    void noOriginalContentSkipsResummarization() {
+        // 深工具轮边界形态：被摘区只剩 [旧摘要 Sys, 首条 user]，重摘无信息增量——
+        // 直接放行且不发起摘要调用（消灭「每步触发、收缩恒零」的重复摘要循环）
+        List<Message> msgs = new java.util.ArrayList<>();
+        msgs.add(new org.springframework.ai.chat.messages.SystemMessage(
+            SummarizingModelHook.SUMMARY_PREFIX + "旧摘要"));
+        msgs.add(new UserMessage("u0 ".repeat(2000))); // 撑大估算超阈值
+        msgs.add(new AssistantMessage("a0"));
+        msgs.add(new UserMessage("u1"));
+        msgs.add(new AssistantMessage("a1"));
+        msgs.add(new UserMessage("u2"));
+        msgs.add(new AssistantMessage("a2"));
+        // keepTurns=3 → cutoff=u0 下标 1 → 被摘区 [Sys] 无原文（真实 11→11 场景为 [Sys, u0] 同语义）
+        assertThat(hook(1, 3).compact(msgs, config())).isNull();
+        org.mockito.Mockito.verify(model, org.mockito.Mockito.never())
+            .call(any(org.springframework.ai.chat.prompt.Prompt.class));
+    }
+
+    @Test
+    void effectiveThresholdDerivedFromMaxContextAndRatio() {
+        // threshold-tokens 未显式配置（-1）时：生效阈值 = max-context × trigger-ratio
+        SummarizingModelHook h = new SummarizingModelHook(model, ctx -> {}, stubPrompt(),
+            -1, 1_000L, 0.8, 20, 2, Duration.ofSeconds(60));
+        assertThat(h.effectiveThresholdTokens()).isEqualTo(800);
+        // 显式配置优先
+        SummarizingModelHook explicit = new SummarizingModelHook(model, ctx -> {}, stubPrompt(),
+            123, 1_000L, 0.8, 20, 2, Duration.ofSeconds(60));
+        assertThat(explicit.effectiveThresholdTokens()).isEqualTo(123);
+    }
+
+    @Test
+    void summarizeRequestUsesLowReasoningEffort() {
+        // StepFun 官方：reasoning_effort=low 适用「摘要」场景——压掉摘要调用的深思考耗时
+        when(model.call(any(org.springframework.ai.chat.prompt.Prompt.class)))
+            .thenReturn(summaryResponse("S"));
+        List<Message> msgs = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            msgs.add(new UserMessage("u" + i + " ".repeat(100)));
+            msgs.add(new AssistantMessage("a" + i));
+        }
+        hook(1, 20).compact(msgs, config());
+        org.mockito.ArgumentCaptor<org.springframework.ai.chat.prompt.Prompt> captor =
+            org.mockito.ArgumentCaptor.forClass(org.springframework.ai.chat.prompt.Prompt.class);
+        org.mockito.Mockito.verify(model).call(captor.capture());
+        assertThat(captor.getValue().getOptions()).isInstanceOf(org.springframework.ai.openai.OpenAiChatOptions.class);
+        org.springframework.ai.openai.OpenAiChatOptions options =
+            (org.springframework.ai.openai.OpenAiChatOptions) captor.getValue().getOptions();
+        assertThat(options.getReasoningEffort()).isEqualTo("low");
+    }
 }

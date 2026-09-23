@@ -62,10 +62,14 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 - **给模型的记忆**：SAA `PostgresSaver`（graph-core 内置，表 graphthread/graphcheckpoint），threadId = conversation.threadId，恒为 `conv-{id}`（不再压缩换代）；`CheckpointCleaner` 按 `conv-{id}` 前缀删除（`-v%` 模式仅为兼容历史行保留）。
 - **给前端的展示**：turn/message 表，**不存 delta**——THINKING/TEXT 按段落边界（工具调用开始/轮次结束）flush 完整 Message（SegmentBuffer 累积）；TOOL_CALL/TOOL_RESULT 各一行以 call_id 关联。
 - 压缩：`SummarizingModelHook`（BEFORE_MODEL，AgentFactory 挂载）对**真实 state messages**
-  估算 token（`agent.compaction.chars-per-token`，默认 2），超 `threshold-tokens` 时保最近
+  估算 token（`agent.compaction.chars-per-token`，默认 2），超生效阈值时保最近
   `keep-turns`（默认 20）个完整 turn + 首条 UserMessage，其余经 cache-safe 调用（原消息前缀
-  + 尾部压缩指令）生成摘要，`UpdatePolicy.REPLACE` 原地替换——**不换 threadId、不碰展示存储**；
-  失败/超时原样放行。新会话 threadId 恒为 `conv-{id}`（存量 `-v{n}` 线程原样沿用，永不回写）；
+  + 尾部压缩指令，`reasoning_effort=low` 限思考）生成摘要，`UpdatePolicy.REPLACE` 原地替换——
+  **不换 threadId、不碰展示存储**；失败/超时原样放行。**阈值派生**：`threshold-tokens` 显式
+  配置（>0）优先，否则 = `max-context-tokens`（262144，step-3.7-flash 256K）× `trigger-ratio`
+  （默认 0.8）；**幂等守卫**：被摘区仅剩旧摘要/首条用户消息（无原文）时跳过——防深工具轮
+  「每步触发、收缩恒零」的重复摘要循环（实测曾致 30s 级无效摘要调用）。
+  新会话 threadId 恒为 `conv-{id}`（存量 `-v{n}` 线程原样沿用，永不回写）；
   `compact_summary`/`compacted_turn_seq` 列停用（PO 字段保留，创建时摘要列传 null、锚点列传 0
   （NOT NULL 列））；`CompactionSummarySink` 为跨会话接力预留（MVP LoggingSummarySink）。
   已实证坑：`AgentCommand.getMessages()` 包私有——hook 核心逻辑须收在包可见 `compact()` 供单测。

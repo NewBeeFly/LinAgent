@@ -54,33 +54,49 @@ public class SummarizingModelHook extends MessagesModelHook {
     static final String COMPACT_INSTRUCTION = """
         请把以上对话历史（含此前的压缩摘要）压缩为一段忠实、信息完备的摘要：保留用户目标、
         已完成的关键操作与结论、未决事项。直接输出摘要正文，不要任何前后缀。""";
+    /** 摘要调用的推理强度：low（StepFun 官方对「摘要/改写/信息抽取」场景的推荐档位） */
+    static final String SUMMARY_REASONING_EFFORT = "low";
     private static final int SEARCH_RANGE_FOR_TOOL_PAIRS = 5;
 
     private final ChatModel chatModel;
     private final CompactionSummarySink summarySink;
     private final ResidentPromptBuilder residentPromptBuilder;
-    private final int thresholdTokens;
+    /** 生效阈值：threshold-tokens 显式配置（>0）优先，否则 = max-context-tokens × trigger-ratio */
+    private final int effectiveThresholdTokens;
+    /** 模型最大上下文窗口（step-3.7-flash = 262144），用于派生阈值与日志占比 */
+    private final long maxContextTokens;
     private final int keepTurns;
     private final int charsPerToken;
     private final Duration summaryTimeout;
 
-    /** Spring 装配构造器（@Value 注入配置）；与下方七参构造器并存时必须 @Autowired 指定本构造器 */
+    /** Spring 装配构造器（@Value 注入配置）；多构造器并存时必须 @Autowired 指定本构造器 */
     @Autowired
     public SummarizingModelHook(ChatModel chatModel, CompactionSummarySink summarySink,
                                 ResidentPromptBuilder residentPromptBuilder,
-                                @Value("${agent.compaction.threshold-tokens:48000}") int thresholdTokens,
+                                @Value("${agent.compaction.threshold-tokens:-1}") int thresholdTokens,
+                                @Value("${agent.compaction.max-context-tokens:262144}") long maxContextTokens,
+                                @Value("${agent.compaction.trigger-ratio:0.8}") double triggerRatio,
                                 @Value("${agent.compaction.keep-turns:20}") int keepTurns,
                                 @Value("${agent.compaction.chars-per-token:2}") int charsPerToken,
                                 @Value("${agent.compaction.summary-timeout-seconds:60}") long summaryTimeoutSeconds) {
-        this(chatModel, summarySink, residentPromptBuilder, thresholdTokens, keepTurns, charsPerToken,
-            Duration.ofSeconds(summaryTimeoutSeconds));
+        this(chatModel, summarySink, residentPromptBuilder, thresholdTokens, maxContextTokens,
+            triggerRatio, keepTurns, charsPerToken, Duration.ofSeconds(summaryTimeoutSeconds));
     }
 
-    /** 单测直用构造器（显式 Duration 超时）；配置防御在此收口，Spring 构造器经委托同受守护 */
+    /** 单测直用构造器（显式 Duration 超时，max-context 取默认）；配置防御在九参构造器收口 */
     public SummarizingModelHook(ChatModel chatModel, CompactionSummarySink summarySink,
                                 ResidentPromptBuilder residentPromptBuilder,
                                 int thresholdTokens, int keepTurns, int charsPerToken,
                                 Duration summaryTimeout) {
+        this(chatModel, summarySink, residentPromptBuilder, thresholdTokens, 262144L, 0.8,
+            keepTurns, charsPerToken, summaryTimeout);
+    }
+
+    /** 全参构造器：thresholdTokens ≤ 0 表示未显式配置，按 max-context × ratio 派生 */
+    public SummarizingModelHook(ChatModel chatModel, CompactionSummarySink summarySink,
+                                ResidentPromptBuilder residentPromptBuilder,
+                                int thresholdTokens, long maxContextTokens, double triggerRatio,
+                                int keepTurns, int charsPerToken, Duration summaryTimeout) {
         if (keepTurns < 1) {
             throw new IllegalArgumentException("agent.compaction.keep-turns 必须 >= 1");
         }
@@ -90,13 +106,25 @@ public class SummarizingModelHook extends MessagesModelHook {
         if (summaryTimeout.isZero() || summaryTimeout.isNegative()) {
             throw new IllegalArgumentException("agent.compaction.summary-timeout-seconds 必须为正");
         }
+        if (thresholdTokens <= 0 && (triggerRatio <= 0 || maxContextTokens <= 0)) {
+            throw new IllegalArgumentException(
+                "threshold-tokens 未配置（≤0）时 max-context-tokens 与 trigger-ratio 必须为正");
+        }
         this.chatModel = chatModel;
         this.summarySink = summarySink;
         this.residentPromptBuilder = residentPromptBuilder;
-        this.thresholdTokens = thresholdTokens;
+        this.maxContextTokens = maxContextTokens;
+        this.effectiveThresholdTokens = thresholdTokens > 0
+            ? thresholdTokens
+            : (int) (maxContextTokens * triggerRatio);
         this.keepTurns = keepTurns;
         this.charsPerToken = charsPerToken;
         this.summaryTimeout = summaryTimeout;
+    }
+
+    /** 生效阈值（包可见供单测）：显式 threshold-tokens 优先，否则 max-context × trigger-ratio */
+    int effectiveThresholdTokens() {
+        return effectiveThresholdTokens;
     }
 
     @Override
@@ -110,13 +138,14 @@ public class SummarizingModelHook extends MessagesModelHook {
     /** null=放行；非null=REPLACE 新列表 [SystemMessage(摘要), 首条UserMessage?, ...保留区] */
     List<Message> compact(List<Message> previousMessages, RunnableConfig config) {
         int totalTokens = estimateTokens(previousMessages);
-        if (totalTokens <= thresholdTokens) {
+        if (totalTokens <= effectiveThresholdTokens) {
             return null;
         }
         int cutoff = findTurnCutoff(previousMessages);
         if (cutoff <= 0) {
-            log.info("[compaction] 跳过：可切割轮次不足 keepTurns={}，估算tokens={} threadId={}",
-                keepTurns, totalTokens, config.threadId().orElse(""));
+            log.info("[compaction] 跳过：可切割轮次不足 keepTurns={}，估算tokens={}/{} ({}%) 阈值={} threadId={}",
+                keepTurns, totalTokens, maxContextTokens, percentOf(totalTokens), effectiveThresholdTokens,
+                config.threadId().orElse(""));
             return null;
         }
         UserMessage firstUser = null;
@@ -125,6 +154,22 @@ public class SummarizingModelHook extends MessagesModelHook {
                 firstUser = u;
                 break;
             }
+        }
+        // 幂等守卫：被摘区仅剩旧摘要 SystemMessage（与首条用户消息）时重摘无信息增量——
+        // 深工具轮的保留区顶住阈值时会陷入「每步触发、收缩恒零」的重复摘要循环，直接放行
+        boolean hasOriginalContent = false;
+        for (int i = 0; i < cutoff; i++) {
+            Message m = previousMessages.get(i);
+            if (m != firstUser && !(m instanceof SystemMessage)) {
+                hasOriginalContent = true;
+                break;
+            }
+        }
+        if (!hasOriginalContent) {
+            log.info("[compaction] 跳过：被摘区无原文（仅旧摘要/首条用户消息），重摘无增量 "
+                    + "估算tokens={}/{} ({}%) threadId={}",
+                totalTokens, maxContextTokens, percentOf(totalTokens), config.threadId().orElse(""));
+            return null;
         }
 
         int messagesBefore = previousMessages.size();
@@ -141,8 +186,9 @@ public class SummarizingModelHook extends MessagesModelHook {
         }
         newMessages.addAll(previousMessages.subList(cutoff, previousMessages.size()));
 
-        log.info("[compaction] threadId={} 估算tokens={} 阈值={} 消息 {}→{} 摘要耗时={}ms summaryChars={}",
-            config.threadId().orElse(""), totalTokens, thresholdTokens, messagesBefore,
+        log.info("[compaction] threadId={} 估算tokens={}/{} ({}%) 阈值={} 消息 {}→{} 摘要耗时={}ms summaryChars={}",
+            config.threadId().orElse(""), totalTokens, maxContextTokens, percentOf(totalTokens),
+            effectiveThresholdTokens, messagesBefore,
             newMessages.size(), System.currentTimeMillis() - start, summary.length());
         try {
             summarySink.onSummary(new CompactionSummarySink.SummaryContext(
@@ -154,19 +200,28 @@ public class SummarizingModelHook extends MessagesModelHook {
         return newMessages;
     }
 
+    /** 估算 tokens 占最大上下文的百分比（日志展示；+1 防御总量为 0 时除零） */
+    private int percentOf(long totalTokens) {
+        return (int) (totalTokens * 100 / (maxContextTokens + 1));
+    }
+
     /**
      * cache-safe 摘要：请求 = [SystemMessage(systemPrompt), msg[0..cutoff) 原样（含首条 UserMessage）,
      * 尾部压缩指令]——与主调用 [systemPrompt, u0, a0, u1, ...] 从首位起前缀对齐（StepFun 前缀缓存
      * 从首 token 比对）；失败/超时返回 null。
+     * 摘要属轻量抽取任务，reasoning_effort=low 压掉深思考耗时（StepFun 官方：low 适用摘要场景）。
      */
     private String summarize(List<Message> previousMessages, int cutoff, RunnableConfig config) {
         List<Message> request = new ArrayList<>();
         request.add(new SystemMessage(residentPromptBuilder.build()));
         request.addAll(previousMessages.subList(0, cutoff));
         request.add(new UserMessage(COMPACT_INSTRUCTION));
+        Prompt summaryPrompt = new Prompt(request, org.springframework.ai.openai.OpenAiChatOptions.builder()
+            .reasoningEffort(SUMMARY_REASONING_EFFORT)
+            .build());
         // block() 在 Reactor NonBlocking 线程会立刻抛 IllegalStateException（静默劣化为压缩永久
         // 失败）；CompletableFuture.get 无此检查。超时后 cancel(true) 通知下游放弃迟到结果。
-        CompletableFuture<ChatResponse> future = Mono.fromCallable(() -> chatModel.call(new Prompt(request)))
+        CompletableFuture<ChatResponse> future = Mono.fromCallable(() -> chatModel.call(summaryPrompt))
             .subscribeOn(Schedulers.boundedElastic())
             .toFuture();
         try {
