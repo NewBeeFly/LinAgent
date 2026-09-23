@@ -128,4 +128,22 @@ class ChatControllerSseTest {
                     .doesNotContain("\"message\"");
             });
     }
+
+    /** 审批未决挡回新消息（Task 6）：facade 同步抛 ApprovalPendingException → 409 +
+     *  {message, conversationId}（前端据此滚动到审批卡片，spec §6 协议分流） */
+    @Test
+    void chatBlockedByPendingApprovalReturns409WithConversationId() {
+        when(agentFacade.chat(eq(3L), eq("再问一句")))
+            .thenThrow(new com.linagent.agent.facade.ApprovalPendingException(3L));
+
+        webTestClient.post().uri("/api/conversations/3/chat")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue(new com.linagent.web.dto.ChatRequest("再问一句"))
+            .exchange()
+            .expectStatus().isEqualTo(409)
+            .expectBody(java.util.Map.class).value(body -> {
+                org.assertj.core.api.Assertions.assertThat(body.get("conversationId")).isEqualTo(3);
+                org.assertj.core.api.Assertions.assertThat((String) body.get("message")).contains("待审批");
+            });
+    }
 }

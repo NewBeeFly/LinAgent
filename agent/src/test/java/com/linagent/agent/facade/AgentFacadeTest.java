@@ -73,8 +73,12 @@ class AgentFacadeTest {
             ReactAgent agent = mock(ReactAgent.class);
             when(agent.stream(any(UserMessage.class), any(RunnableConfig.class)))
                 .thenAnswer(streamInv -> stubAgentMainFlux());
+            // resume 路径（Task 6，spike 结论 B）：stream(Map.of(), config)
+            when(agent.stream(org.mockito.ArgumentMatchers.<java.util.Map<String, Object>>any(),
+                any(RunnableConfig.class)))
+                .thenAnswer(streamInv -> stubAgentMainFlux());
             capturedAgent = agent;
-            return new AgentFactory.AgentHandle(agent, null, "stub-system-prompt");
+            return new AgentFactory.AgentHandle(agent, null, "stub-system-prompt", config -> { });
         });
 
         facade = new AgentFacade(factory, conversations, turns, messages, "step-3.7-flash");
@@ -372,6 +376,93 @@ class AgentFacadeTest {
             .isEqualTo("COMPLETED");
     }
 
+    // ---- Task 6：resume 决议续跑 ----
+
+    /** 无等待轮时 resume 同步抛 ApprovalConflictException（重复提交竞态兜底），先于建流 */
+    @Test
+    void resumeWithoutWaitingTurnThrowsConflict() {
+        Conversation conv = conversations.seed(null);
+        // 无 WAITING_APPROVAL 轮（会话空 / 已决议）
+
+        assertThatThrownBy(() -> facade.resume(conv.id(), approveAllFeedback()))
+            .isInstanceOf(ApprovalConflictException.class);
+
+        assertThat(capturedAgent).isNull(); // 抛出先于 agent 构建
+    }
+
+    /** resume 复用等待轮：WAITING_APPROVAL → RUNNING → COMPLETED，不新建 turn/USER 行，
+     *  展示层 seq 从既有最大 seq 续接，图输入为 Map.of()（spike 结论 B，绝不传 UserMessage） */
+    @Test
+    void resumeCompletesWaitingTurnWithoutNewUserRowAndContinuesSeq()
+            throws com.alibaba.cloud.ai.graph.exception.GraphRunnerException {
+        Conversation conv = conversations.seed(null);
+        // 先跑一轮到中断：USER(0) + TEXT(1) + TOOL_CALL(2)
+        stubMainFlux = Flux.just(stubStreamingOutput("回"),
+            stubApprovalInterruption(pendingShellItem()));
+        facade.chat(conv.id(), "删文件").blockLast();
+        Long turnId = turns.findTopByConversationIdOrderBySeqDesc(conv.id()).orElseThrow().id();
+        assertThat(turns.findById(turnId).orElseThrow().status()).isEqualTo("WAITING_APPROVAL");
+
+        // 决议续跑：两段正文 → TurnDone
+        stubMainFlux = Flux.just(stubStreamingOutput("执"), stubStreamingOutput("行"));
+        StepVerifier.create(facade.resume(conv.id(), approveAllFeedback()))
+            .expectNextMatches(e -> e instanceof AgentEvent.Meta m && m.turnId().equals(turnId))
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta d && d.content().equals("执"))
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta d && d.content().equals("行"))
+            .expectNextMatches(e -> e instanceof AgentEvent.TurnDone
+                && ((AgentEvent.TurnDone) e).finishReason().equals("STOP"))
+            .verifyComplete();
+
+        // 图输入形态钉死：resume 走 Map 空 inputs，不发 UserMessage（防幻影历史回归）
+        verify(capturedAgent).stream(any(java.util.Map.class), any(RunnableConfig.class));
+
+        // turn 终态 COMPLETED；轮次总数不变（复用等待轮）；USER 行仍只 1 条
+        assertThat(turns.countByConversationId(conv.id())).isEqualTo(1);
+        assertThat(turns.findById(turnId).orElseThrow().status()).isEqualTo("COMPLETED");
+        List<Message> saved = messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id());
+        assertThat(saved).extracting(Message::msgType)
+            .containsExactly("USER", "TEXT", "TOOL_CALL", "TEXT");
+        // seq 续接：中断前最大 seq=2，续跑 TEXT 从 3 起（无 UNIQUE(turn_id, seq) 冲突）
+        assertThat(saved.get(3).seq()).isEqualTo(3);
+    }
+
+    /** resume 续跑再次中断（模型又发起未放行调用）：同一管线递归生效——再发 ApprovalRequest、
+     *  turn 再落 WAITING_APPROVAL、无 TurnDone（spec §6 递归语义） */
+    @Test
+    void resumeRecursiveInterruptionEmitsAnotherApprovalRequest() {
+        Conversation conv = conversations.seed(null);
+        stubMainFlux = Flux.just(stubApprovalInterruption(pendingShellItem()));
+        facade.chat(conv.id(), "删文件").blockLast();
+        Long turnId = turns.findTopByConversationIdOrderBySeqDesc(conv.id()).orElseThrow().id();
+
+        stubMainFlux = Flux.just(stubStreamingOutput("再"),
+            stubApprovalInterruption(new PermissionRuleEngine.PendingItem("call-10", "shell",
+                "{\"command\":\"rm -rf /data\"}", "rm -rf /data",
+                List.of(new PermissionRuleEngine.SubVerdict("rm -rf /data", false, null)), "rm *")));
+        StepVerifier.create(facade.resume(conv.id(), approveAllFeedback()))
+            .expectNextMatches(e -> e instanceof AgentEvent.Meta)
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta d && d.content().equals("再"))
+            .expectNextMatches(e -> e instanceof AgentEvent.ApprovalRequest ar
+                && ar.turnId().equals(turnId)
+                && ar.items().get(0).callId().equals("call-10"))
+            .verifyComplete(); // 无 TurnDone
+
+        assertThat(turns.findById(turnId).orElseThrow().status()).isEqualTo("WAITING_APPROVAL");
+        List<Message> saved = messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id());
+        assertThat(saved).extracting(Message::msgType)
+            .containsExactly("USER", "TOOL_CALL", "TEXT", "TOOL_CALL");
+        assertThat(saved.get(3).callId()).isEqualTo("call-10");
+    }
+
+    /** resume 决议元数据桩：APPROVED + 全部待审批项（Task 6 端点构建形态） */
+    private static InterruptionMetadata approveAllFeedback() {
+        return InterruptionMetadata.builder(ApprovalHook.HITL_NODE_FULL_NAME, null)
+            .addToolFeedback(InterruptionMetadata.ToolFeedback.builder()
+                .id("call-9").name("shell").arguments("{\"command\":\"rm -rf /tmp/x\"}")
+                .result(InterruptionMetadata.ToolFeedback.FeedbackResult.APPROVED).build())
+            .build();
+    }
+
     /** 桩：一个待审批 shell 项（引擎 NEEDS_APPROVAL 形态，arguments 为模型原始 JSON） */
     private static PermissionRuleEngine.PendingItem pendingShellItem() {
         return new PermissionRuleEngine.PendingItem("call-9", "shell",
@@ -518,6 +609,12 @@ class AgentFacadeTest {
         @Override public boolean existsByConversationIdAndStatus(Long conversationId, String status) {
             return data.stream().anyMatch(t -> t.conversationId().equals(conversationId)
                 && status.equals(t.status()));
+        }
+        @Override public Optional<Turn> findTopByConversationIdAndStatusOrderBySeqDesc(
+                Long conversationId, String status) {
+            return data.stream().filter(t -> t.conversationId().equals(conversationId)
+                    && status.equals(t.status()))
+                .max(java.util.Comparator.comparing(Turn::seq));
         }
     }
 

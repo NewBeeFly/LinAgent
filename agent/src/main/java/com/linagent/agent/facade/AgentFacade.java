@@ -25,12 +25,14 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Sinks;
 
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * agent 引擎唯一门面：chat(conversationId, content) → Flux&lt;AgentEvent&gt;。
- * 落库在 agent 模块内完成（web 层零持久化职责）。
+ * agent 引擎唯一门面：chat(conversationId, content) / resume(conversationId, feedback)
+ * → Flux&lt;AgentEvent&gt;。落库在 agent 模块内完成（web 层零持久化职责）。
  *
  * 事件三路合并：
  * 1. side（Sinks.Many）—— ThinkingTap 发 thinking 增量（String），EventEmittingToolInterceptor
@@ -38,9 +40,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * 2. main（agent.stream 的 Flux&lt;NodeOutput&gt;）—— LLM 节点流式 chunk → MessageDelta；
  * 3. 收尾 —— main 流 concatWith 发 TurnDone（含 usage、turn COMPLETED、会话 touch）。
  *
- * 审批中断（Task 5，spike 结论 A）：main 流尾元素为 InterruptionMetadata 时走中断分支——
- * 发 ApprovalRequest 流尾事件、turn 停在 WAITING_APPROVAL、跳过 TurnDone；会话存在
- * 未决等待轮时 chat 前置抛 ApprovalPendingException（先决议后继续）。
+ * chat 与 resume 共用 {@link #runTurn} 管线（含审批中断分支：流尾 InterruptionMetadata →
+ * ApprovalRequest 流尾事件、turn 停 WAITING_APPROVAL、跳过 TurnDone——resume 后续跑若再次
+ * 中断，同一分支天然递归生效）；差异仅在轮次准备段：chat 新建 turn + USER 消息 + 传
+ * UserMessage，resume 复用等待轮 + seq 续接 + 传空输入与 HUMAN_FEEDBACK metadata
+ * （spike 结论 B：resume 绝不传 UserMessage，会产生乱序幻影历史）。
+ *
+ * 审批未决前置（Task 5）：存在 WAITING_APPROVAL 轮时 chat 抛 ApprovalPendingException
+ * （先决议后继续）；resume 反向校验——无等待轮抛 ApprovalConflictException（重复提交竞态）。
  *
  * side sink 的 complete 由 main 流终止时触发（doFinally），外层 doFinally 仅兜底，
  * 避免 merge 因 side 永不终止而悬挂。
@@ -71,7 +78,7 @@ public class AgentFacade {
         AuthContext ctx = AuthContextHolder.require();
         // 归属预检同步抛出：HTTP 404（GlobalExceptionHandler 映射）先于 SSE 建流
         conversations.requireOwned(conversationId, ctx.tenantId(), ctx.userId());
-        // 审批未决前置（Task 5，web 层 Task 6 映射 409）：存在 WAITING_APPROVAL 轮即拒绝
+        // 审批未决前置（Task 5，web 层映射 409）：存在 WAITING_APPROVAL 轮即拒绝
         // 新消息——先决议后继续，避免同会话两个未决审批的 checkpoint 竞态
         // （resume 依赖 threadId 最新 checkpoint 的 nextNodeId）
         if (turns.existsByConversationIdAndStatus(conversationId, "WAITING_APPROVAL")) {
@@ -87,109 +94,169 @@ public class AgentFacade {
             Turn turn = turns.save(Turn.running(conv.id(), turnSeq));
             messages.save(Message.user(turn.id(), 0, content));
 
-            SegmentBuffer buffer = new SegmentBuffer(turn.id(), messages);
-            // 终态收口 once-guard（fix round 1）：flushAll→终态落库在 完成/异常/取消/中断
-            // 四条路径中只执行一次——CANCEL 与末条 TurnDone 发射竞态时不会把 COMPLETED 覆写为
-            // FAILED；flushAll 的跨线程原子性由 SegmentBuffer 自身 synchronized 保证
-            AtomicBoolean finalized = new AtomicBoolean(false);
-            // 审批中断标记（Task 5）：流尾 InterruptionMetadata 携带待审批项时置位，
-            // TurnDone 收尾段据此跳过（流以 ApprovalRequest 收尾，turn 停在 WAITING_APPROVAL）
-            AtomicBoolean interrupted = new AtomicBoolean(false);
-            // 三路发射方（ThinkingTap / 工具拦截器，SAA 并行 tool call 时多线程）共享同一
-            // unicast sink：经 SerializedEmitSink 串行收口，避免 FAIL_NON_SERIALIZED 静默丢事件
-            Sinks.Many<Object> sideEvents =
-                new SerializedEmitSink(Sinks.many().unicast().onBackpressureBuffer());
-            AtomicReference<Object> usageCapture = new AtomicReference<>();
-
-            EventEmittingToolInterceptor toolInterceptor =
-                new EventEmittingToolInterceptor(sideEvents, buffer, turn.id());
-            AgentFactory.AgentHandle handle =
-                agentFactory.create(ctx, conversationId, sideEvents, usageCapture, toolInterceptor);
-
             RunnableConfig config = RunnableConfig.builder()
                 .threadId(conv.threadId())
                 .build();
+            return runTurn(conv, ctx, turn, new SegmentBuffer(turn.id(), messages),
+                // 恒只传当前 UserMessage（spec §4：根治摘要重复注入）
+                handle -> handle.agent().stream(new UserMessage(content), config));
+        });
+    }
 
-            // side 流：String → ThinkingDelta（同时累积 buffer）；已构造的 AgentEvent 直接透传
-            Flux<AgentEvent> side = sideEvents.asFlux().map(evt -> {
-                if (evt instanceof String thinkingDelta) {
-                    buffer.appendThinking(thinkingDelta);
-                    return (AgentEvent) new AgentEvent.ThinkingDelta(turn.id(), thinkingDelta);
+    /**
+     * 审批决议续跑（Task 6，spike 结论 B）：同 threadId + HUMAN_FEEDBACK metadata +
+     * stream(Map.of(), config)——从最新 checkpoint 的 HITL 节点继续，绝不传 UserMessage
+     * （幻影消息乱序污染历史）。复用等待轮（不新建 turn/USER 行），展示层 seq 从既有
+     * 最大 seq 续接；WAITING_APPROVAL → RUNNING 后走与 chat 相同的事件管线，续跑再次
+     * 中断则再发 ApprovalRequest（递归语义），正常收口发 TurnDone。
+     *
+     * <p>无等待轮同步抛 {@link ApprovalConflictException}（重复提交/竞态，web 映射 409），
+     * 先于 SSE 建流。
+     */
+    public Flux<AgentEvent> resume(Long conversationId, InterruptionMetadata feedback) {
+        AuthContext ctx = AuthContextHolder.require();
+        conversations.requireOwned(conversationId, ctx.tenantId(), ctx.userId());
+        // 决议前置校验（控制器已按 409 挡重复提交，此处兜底真并发竞态）
+        turns.findTopByConversationIdAndStatusOrderBySeqDesc(conversationId, "WAITING_APPROVAL")
+            .orElseThrow(() -> new ApprovalConflictException(
+                conversationId, "会话无待审批轮次可恢复（重复提交或已决议）: " + conversationId));
+        return Flux.defer(() -> {
+            Conversation conv = conversations.findById(conversationId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + conversationId));
+            Turn turn = turns.findTopByConversationIdAndStatusOrderBySeqDesc(conversationId, "WAITING_APPROVAL")
+                .orElseThrow(() -> new ApprovalConflictException(
+                    conversationId, "会话无待审批轮次可恢复（重复提交或已决议）: " + conversationId));
+            turn = turns.save(turn.resumed());
+
+            // 展示层 seq 续接：中断前已落行（USER/TEXT/TOOL_CALL...）之后继续
+            List<Message> existing = messages.findByTurnIdOrderBySeq(turn.id());
+            int startSeq = existing.isEmpty() ? 1 : existing.get(existing.size() - 1).seq() + 1;
+
+            RunnableConfig config = RunnableConfig.builder()
+                .threadId(conv.threadId())
+                .addMetadata(RunnableConfig.HUMAN_FEEDBACK_METADATA_KEY, feedback)
+                .build();
+            return runTurn(conv, ctx, turn, new SegmentBuffer(turn.id(), messages, startSeq),
+                // 续跑不经过 BEFORE_AGENT 节点（shell 会话等运行时初始化缺席），handle 携带
+                // 的 resumePrimer 先行补齐，再开流
+                handle -> {
+                    handle.resumePrimer().accept(config);
+                    return handle.agent().stream(Map.of(), config);
+                });
+        });
+    }
+
+    /** 图调用开口：chat 传 UserMessage（新轮），resume 传空输入 + feedback config（续跑） */
+    @FunctionalInterface
+    private interface AgentStreamOpener {
+        Flux<NodeOutput> open(AgentFactory.AgentHandle handle) throws GraphRunnerException;
+    }
+
+    /**
+     * chat/resume 共用的事件管线：side（thinking/工具事件）与 main（NodeOutput）三路合并，
+     * 含审批中断分支、TurnDone 收尾、错误降级与 CANCEL 收口。turn 落库语义由调用方准备
+     * （chat 新建/resume 续用），终态流转（COMPLETED/FAILED/WAITING_APPROVAL）在本管线内。
+     */
+    private Flux<AgentEvent> runTurn(Conversation conv, AuthContext ctx, Turn turn, SegmentBuffer buffer,
+                                     AgentStreamOpener streamOpener) {
+        Long conversationId = conv.id();
+        // 终态收口 once-guard（fix round 1）：flushAll→终态落库在 完成/异常/取消/中断
+        // 四条路径中只执行一次——CANCEL 与末条 TurnDone 发射竞态时不会把 COMPLETED 覆写为
+        // FAILED；flushAll 的跨线程原子性由 SegmentBuffer 自身 synchronized 保证
+        AtomicBoolean finalized = new AtomicBoolean(false);
+        // 审批中断标记（Task 5）：流尾 InterruptionMetadata 携带待审批项时置位，
+        // TurnDone 收尾段据此跳过（流以 ApprovalRequest 收尾，turn 停在 WAITING_APPROVAL）
+        AtomicBoolean interrupted = new AtomicBoolean(false);
+        // 三路发射方（ThinkingTap / 工具拦截器，SAA 并行 tool call 时多线程）共享同一
+        // unicast sink：经 SerializedEmitSink 串行收口，避免 FAIL_NON_SERIALIZED 静默丢事件
+        Sinks.Many<Object> sideEvents =
+            new SerializedEmitSink(Sinks.many().unicast().onBackpressureBuffer());
+        AtomicReference<Object> usageCapture = new AtomicReference<>();
+
+        EventEmittingToolInterceptor toolInterceptor =
+            new EventEmittingToolInterceptor(sideEvents, buffer, turn.id());
+        AgentFactory.AgentHandle handle =
+            agentFactory.create(ctx, conversationId, sideEvents, usageCapture, toolInterceptor);
+
+        // agent.stream 声明受检 GraphRunnerException，在 defer 内转 Flux.error 走统一错误路径
+        Flux<NodeOutput> nodeOutputs;
+        try {
+            nodeOutputs = streamOpener.open(handle);
+        }
+        catch (GraphRunnerException e) {
+            nodeOutputs = Flux.error(e);
+        }
+
+        // side 流：String → ThinkingDelta（同时累积 buffer）；已构造的 AgentEvent 直接透传
+        Flux<AgentEvent> side = sideEvents.asFlux().map(evt -> {
+            if (evt instanceof String thinkingDelta) {
+                buffer.appendThinking(thinkingDelta);
+                return (AgentEvent) new AgentEvent.ThinkingDelta(turn.id(), thinkingDelta);
+            }
+            return (AgentEvent) evt;
+        });
+
+        Flux<AgentEvent> main = nodeOutputs
+            .concatMap(nodeOutput -> {
+                // 审批中断检测（spike 结论 A：中断即流的最后元素为 InterruptionMetadata，
+                // 流随后正常 complete）：待审批项经 metadata 反解，走中断分支收尾
+                if (nodeOutput instanceof InterruptionMetadata md) {
+                    return onApprovalInterruption(md, turn, conv, buffer, interrupted, finalized);
                 }
-                return (AgentEvent) evt;
+                return mapNodeOutput(nodeOutput, turn.id(), buffer);
+            })
+            .concatWith(Flux.defer(() -> {
+                if (interrupted.get()) {
+                    // 中断路径不收 TurnDone（流以 ApprovalRequest 收尾）；turn 终态
+                    // 已由中断分支落 WAITING_APPROVAL，等待审批决议（resume 补终态）
+                    return Flux.empty();
+                }
+                // usage 在 complete 之前取值：ThinkingTap 捕获的最后一包 metadata
+                AgentEvent.Usage usage = toUsage(usageCapture.get());
+                if (finalized.compareAndSet(false, true)) {
+                    buffer.flushAll();
+                    turns.save(turns.findById(turn.id()).orElse(turn).complete("STOP", usageJson(usage)));
+                    conversations.touch(conversationId);
+                }
+                return Flux.just(new AgentEvent.TurnDone(turn.id(), "STOP", usage));
+            }))
+            .onErrorResume(e -> {
+                if (finalized.compareAndSet(false, true)) {
+                    buffer.flushAll();
+                    messages.save(Message.error(turn.id(), buffer.currentSeq(), e.toString()));
+                    turns.save(turn.fail("ERROR"));
+                }
+                return Flux.just(new AgentEvent.TurnError(turn.id(), "AGENT_ERROR", e.getMessage()));
+            })
+            // main 终止（正常/异常/取消）时关闭 side sink，使 merge 得以收口；
+            // CANCEL（订阅方断连/中止）：flush 已完成片段 + turn 终态 FAILED/CANCELLED，
+            // 不再永久停留 RUNNING。once-guard 抢占失败 = 收尾路径已落终态
+            // （COMPLETED/ERROR），晚到的 CANCEL 不改写；RUNNING 复核兜底
+            .doFinally(signal -> {
+                sideEvents.tryEmitComplete();
+                if (signal != SignalType.CANCEL) {
+                    return;
+                }
+                if (finalized.compareAndSet(false, true)) {
+                    buffer.flushAll();
+                    turns.findById(turn.id())
+                        .filter(t -> "RUNNING".equals(t.status()))
+                        .ifPresent(t -> turns.save(t.fail("CANCELLED")));
+                }
+                else {
+                    // finalized 已被中断分支消费（turn 已落 WAITING_APPROVAL）而订阅方
+                    // 仍断连：等待轮直接转 FAILED，否则 409 前置检查永久锁死该会话。
+                    // COMPLETED/FAILED 终态被 filter 拦下——once-guard 语义不变
+                    turns.findById(turn.id())
+                        .filter(t -> "WAITING_APPROVAL".equals(t.status()))
+                        .ifPresent(t -> turns.save(t.fail("CANCELLED_WHILE_WAITING")));
+                }
             });
 
-            // agent.stream 声明受检 GraphRunnerException，在 defer 内转 Flux.error 走统一错误路径；
-            // 恒只传当前 UserMessage（spec §4：根治摘要重复注入）
-            Flux<NodeOutput> nodeOutputs;
-            try {
-                nodeOutputs = handle.agent().stream(new UserMessage(content), config);
-            } catch (GraphRunnerException e) {
-                nodeOutputs = Flux.error(e);
-            }
-
-            Flux<AgentEvent> main = nodeOutputs
-                .concatMap(nodeOutput -> {
-                    // 审批中断检测（spike 结论 A：中断即流的最后元素为 InterruptionMetadata，
-                    // 流随后正常 complete）：待审批项经 metadata 反解，走中断分支收尾
-                    if (nodeOutput instanceof InterruptionMetadata md) {
-                        return onApprovalInterruption(md, turn, conv, buffer, interrupted, finalized);
-                    }
-                    return mapNodeOutput(nodeOutput, turn.id(), buffer);
-                })
-                .concatWith(Flux.defer(() -> {
-                    if (interrupted.get()) {
-                        // 中断路径不收 TurnDone（流以 ApprovalRequest 收尾）；turn 终态
-                        // 已由中断分支落 WAITING_APPROVAL，等待审批决议（Task 6 resume 补终态）
-                        return Flux.empty();
-                    }
-                    // usage 在 complete 之前取值：ThinkingTap 捕获的最后一包 metadata
-                    AgentEvent.Usage usage = toUsage(usageCapture.get());
-                    if (finalized.compareAndSet(false, true)) {
-                        buffer.flushAll();
-                        turns.save(turns.findById(turn.id()).orElse(turn).complete("STOP", usageJson(usage)));
-                        conversations.touch(conv.id());
-                    }
-                    return Flux.just(new AgentEvent.TurnDone(turn.id(), "STOP", usage));
-                }))
-                .onErrorResume(e -> {
-                    if (finalized.compareAndSet(false, true)) {
-                        buffer.flushAll();
-                        messages.save(Message.error(turn.id(), buffer.currentSeq(), e.toString()));
-                        turns.save(turn.fail("ERROR"));
-                    }
-                    return Flux.just(new AgentEvent.TurnError(turn.id(), "AGENT_ERROR", e.getMessage()));
-                })
-                // main 终止（正常/异常/取消）时关闭 side sink，使 merge 得以收口；
-                // CANCEL（订阅方断连/中止）：flush 已完成片段 + turn 终态 FAILED/CANCELLED，
-                // 不再永久停留 RUNNING。once-guard 抢占失败 = 收尾路径已落终态
-                // （COMPLETED/ERROR），晚到的 CANCEL 不改写；RUNNING 复核兜底
-                .doFinally(signal -> {
-                    sideEvents.tryEmitComplete();
-                    if (signal != SignalType.CANCEL) {
-                        return;
-                    }
-                    if (finalized.compareAndSet(false, true)) {
-                        buffer.flushAll();
-                        turns.findById(turn.id())
-                            .filter(t -> "RUNNING".equals(t.status()))
-                            .ifPresent(t -> turns.save(t.fail("CANCELLED")));
-                    }
-                    else {
-                        // finalized 已被中断分支消费（turn 已落 WAITING_APPROVAL）而订阅方
-                        // 仍断连：等待轮直接转 FAILED，否则 409 前置检查永久锁死该会话。
-                        // COMPLETED/FAILED 终态被 filter 拦下——once-guard 语义不变
-                        turns.findById(turn.id())
-                            .filter(t -> "WAITING_APPROVAL".equals(t.status()))
-                            .ifPresent(t -> turns.save(t.fail("CANCELLED_WHILE_WAITING")));
-                    }
-                });
-
-            return Flux.merge(side, main)
-                .startWith(new AgentEvent.Meta(turn.id(), conv.id(), model))
-                // 兜底：防止任何路径遗漏 complete 导致订阅悬挂（tryEmitComplete 幂等）
-                .doFinally(signal -> sideEvents.tryEmitComplete());
-        });
+        return Flux.merge(side, main)
+            .startWith(new AgentEvent.Meta(turn.id(), conversationId, model))
+            // 兜底：防止任何路径遗漏 complete 导致订阅悬挂（tryEmitComplete 幂等）
+            .doFinally(signal -> sideEvents.tryEmitComplete());
     }
 
     /** NodeOutput → 事件：LLM 节点流式 chunk → MessageDelta + SegmentBuffer 累积 */

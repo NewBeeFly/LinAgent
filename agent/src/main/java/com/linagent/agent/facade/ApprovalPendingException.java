@@ -7,7 +7,15 @@ package com.linagent.agent.facade;
  */
 public class ApprovalPendingException extends RuntimeException {
 
+    private final Long conversationId;
+
     public ApprovalPendingException(Long conversationId) {
         super("会话存在待审批的轮次，请先完成审批: " + conversationId);
+        this.conversationId = conversationId;
+    }
+
+    /** 409 响应体携带的会话定位（web GlobalExceptionHandler 消费） */
+    public Long conversationId() {
+        return conversationId;
     }
 }

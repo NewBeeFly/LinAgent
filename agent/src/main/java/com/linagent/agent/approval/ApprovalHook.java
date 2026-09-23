@@ -60,6 +60,9 @@ public class ApprovalHook extends ModelHook implements AsyncNodeActionWithConfig
     /** 图节点名（与 SAA HITL 一致，拼前缀后为 _AGENT_HOOK_HITL，checkpoint nextNodeId 依赖） */
     public static final String HITL_NODE_NAME = "HITL";
 
+    /** 中断/恢复节点的全名（InterruptionMetadata.node 实测值；Task 6 构建 resume feedback 用） */
+    public static final String HITL_NODE_FULL_NAME = "_AGENT_HOOK_" + HITL_NODE_NAME;
+
     /**
      * InterruptionMetadata.metadata 下挂全部待审批项（List&lt;PendingItem&gt;）的 key，
      * {@link #verdictFrom} 从此反解供 facade 构建 ApprovalRequest 事件。
@@ -320,8 +323,9 @@ public class ApprovalHook extends ModelHook implements AsyncNodeActionWithConfig
      * （shell=command / write_file=path）优先，无映射或映射字段缺失时取第一个字符串字段
      * （未注册新工具的兜底，判定走引擎默认分支）。JSON 不合法/无字符串字段 → null
      * （空 payload 语义由引擎裁决；工具执行侧同样解析不了该参数，无越权面）。
+     * public（Task 6）：web 审批端点从落库 TOOL_CALL 行重算 payload/suggestedRule 复用。
      */
-    static String extractPayload(String toolName, String argumentsJson) {
+    public static String extractPayload(String toolName, String argumentsJson) {
         if (argumentsJson == null || argumentsJson.isBlank()) {
             return null;
         }

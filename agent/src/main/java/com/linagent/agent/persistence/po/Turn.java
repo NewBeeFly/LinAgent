@@ -25,6 +25,11 @@ public record Turn(@Id Long id, Long conversationId, int seq, String status,
         return new Turn(id, conversationId, seq, "WAITING_APPROVAL", null, usage, startedAt, null);
     }
 
+    /** 决议续跑（Task 6 resume）：WAITING_APPROVAL → RUNNING，finish/finishedAt 清空（终态由续跑管线补） */
+    public Turn resumed() {
+        return new Turn(id, conversationId, seq, "RUNNING", null, usage, startedAt, null);
+    }
+
     public Turn fail(String reason) {
         return new Turn(id, conversationId, seq, "FAILED", reason, usage, startedAt, Instant.now());
     }

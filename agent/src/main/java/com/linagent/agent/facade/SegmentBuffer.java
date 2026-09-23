@@ -28,9 +28,14 @@ public class SegmentBuffer {
     private final StringBuilder text = new StringBuilder();
 
     public SegmentBuffer(Long turnId, MessageRepository repository) {
+        this(turnId, repository, 1);
+    }
+
+    /** resume 续跑（Task 6）：seq 从既有落库行的最大 seq 之后继续（不与中断前已落行冲突） */
+    public SegmentBuffer(Long turnId, MessageRepository repository, int startSeq) {
         this.turnId = turnId;
         this.repository = repository;
-        this.seq = new AtomicInteger(1);
+        this.seq = new AtomicInteger(startSeq);
     }
 
     public synchronized void appendThinking(String delta) {
