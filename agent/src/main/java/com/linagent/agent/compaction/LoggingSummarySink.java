@@ -12,13 +12,10 @@ public class LoggingSummarySink implements CompactionSummarySink {
 
     @Override
     public void onSummary(SummaryContext ctx) {
-        // 摘要全文进日志：压缩产物唯一可观测出口（checkpoint 里仅序列化在 state 内，业务表不落）
-        log.info("""
-            [compaction] summary produced: threadId={} messages {}→{} summaryChars={}
-            --- 压缩摘要全文 ---
-            {}
-            --- 摘要结束 ---""",
+        // 摘要全文进日志（压缩产物唯一可观测出口）。单行化（换行转义）：多行 text block
+        // 只有首行带 logger 前缀，grep/监听会漏正文行
+        log.info("[compaction] summary produced: threadId={} messages {}→{} summaryChars={} 摘要全文=[{}]",
             ctx.threadId(), ctx.messagesBefore(), ctx.messagesAfter(), ctx.summary().length(),
-            ctx.summary());
+            ctx.summary().replace("\n", " ⏎ "));
     }
 }
