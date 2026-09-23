@@ -1,3 +1,6 @@
+server:
+  port: 9018
+
 spring:
   application:
     name: lin-agent
