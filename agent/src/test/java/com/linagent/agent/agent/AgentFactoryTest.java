@@ -40,7 +40,7 @@ class AgentFactoryTest {
         AgentFactory factory = newFactory();
 
         AgentFactory.AgentHandle handle =
-            factory.create(CTX, Sinks.many().unicast().onBackpressureBuffer(), new AtomicReference<>());
+            factory.create(CTX, 1L, Sinks.many().unicast().onBackpressureBuffer(), new AtomicReference<>());
 
         assertThat(handle.agent()).isNotNull();
         assertThat(handle.tappedModel()).isNotNull();
@@ -53,9 +53,9 @@ class AgentFactoryTest {
     void createProvisionsPersonalWorkspacePerIdentity() throws Exception {
         AgentFactory factory = newFactory();
 
-        factory.create(new AuthContext("t", "linmj"),
+        factory.create(new AuthContext("t", "linmj"), 1L,
             Sinks.many().unicast().onBackpressureBuffer(), new AtomicReference<>());
-        factory.create(new AuthContext("t", "tester"),
+        factory.create(new AuthContext("t", "tester"), 2L,
             Sinks.many().unicast().onBackpressureBuffer(), new AtomicReference<>());
 
         assertThat(Files.isDirectory(workspaceTmp.resolve("t/users/linmj"))).isTrue();
@@ -96,6 +96,9 @@ class AgentFactoryTest {
             new WorkspaceResolver(workspaceTmp.toString()),
             // 大阈值=单测内永不触发压缩（hook 仅装配验证）
             new SummarizingModelHook(mock(org.springframework.ai.chat.model.ChatModel.class),
-                ctx -> {}, promptBuilder, 1_000_000, 20, 2, Duration.ofSeconds(60)));
+                ctx -> {}, promptBuilder, 1_000_000, 20, 2, Duration.ofSeconds(60)),
+            // Task 5：审批规则装配入参——仓库 mock 默认返回空列表（无 user 规则，不触发审批判定路径）
+            mock(com.linagent.agent.persistence.repository.PermissionRuleRepository.class),
+            new com.linagent.agent.approval.InMemorySessionRules());
     }
 }

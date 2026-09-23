@@ -40,6 +40,7 @@ public class SseEventMapper {
             case AgentEvent.MessageDelta m -> "message_delta";
             case AgentEvent.ToolCall t -> "tool_call";
             case AgentEvent.ToolResult t -> "tool_result";
+            case AgentEvent.ApprovalRequest a -> "approval_request";
             case AgentEvent.TurnDone t -> "turn_done";
             case AgentEvent.TurnError t -> "error";
         };
@@ -78,6 +79,13 @@ public class SseEventMapper {
                 putIfNotNull(payload, "result", t.result());
                 putIfNotNull(payload, "durationMs", t.durationMs());
                 putIfNotNull(payload, "success", t.success());
+            }
+            case AgentEvent.ApprovalRequest a -> {
+                putIfNotNull(payload, "turnId", a.turnId());
+                putIfNotNull(payload, "conversationId", a.conversationId());
+                // PendingItem record 整体序列化（callId/toolName/arguments/payload/
+                // subVerdicts/suggestedRule），前端审批卡片与回放直接消费
+                putIfNotNull(payload, "items", a.items());
             }
             case AgentEvent.TurnDone t -> {
                 putIfNotNull(payload, "turnId", t.turnId());

@@ -20,6 +20,11 @@ public record Turn(@Id Long id, Long conversationId, int seq, String status,
         return new Turn(id, conversationId, seq, "COMPLETED", finishReason, usageJson, startedAt, Instant.now());
     }
 
+    /** 审批中断态（Task 5）：turn 停在等待决议，finishedAt 置空（未终态）；决议后 resume 补终态 */
+    public Turn waitingApproval() {
+        return new Turn(id, conversationId, seq, "WAITING_APPROVAL", null, usage, startedAt, null);
+    }
+
     public Turn fail(String reason) {
         return new Turn(id, conversationId, seq, "FAILED", reason, usage, startedAt, Instant.now());
     }

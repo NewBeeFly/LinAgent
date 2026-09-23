@@ -2,9 +2,12 @@ package com.linagent.agent.facade;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.alibaba.cloud.ai.graph.action.InterruptionMetadata;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.linagent.agent.agent.AgentFactory;
+import com.linagent.agent.approval.ApprovalHook;
+import com.linagent.agent.approval.PermissionRuleEngine;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.agent.persistence.po.Conversation;
@@ -29,6 +32,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -62,9 +66,10 @@ class AgentFacadeTest {
         stubUsage = usage(10, 20, 30);
 
         AgentFactory factory = mock(AgentFactory.class);
-        when(factory.create(any(), any(), any(), any())).thenAnswer(inv -> {
-            capturedSink = inv.getArgument(1);
-            capturedUsageRef = inv.getArgument(2);
+        when(factory.create(any(), any(), any(), any(), any())).thenAnswer(inv -> {
+            // create(ctx, conversationId, thinkingSink, usageCapture, toolInterceptor)
+            capturedSink = inv.getArgument(2);
+            capturedUsageRef = inv.getArgument(3);
             ReactAgent agent = mock(ReactAgent.class);
             when(agent.stream(any(UserMessage.class), any(RunnableConfig.class)))
                 .thenAnswer(streamInv -> stubAgentMainFlux());
@@ -277,6 +282,120 @@ class AgentFacadeTest {
         verify(capturedAgent, never()).stream(any(List.class), any(RunnableConfig.class));
     }
 
+    // ---- Task 5：审批中断路径 ----
+
+    /** 待审批轮未决时 chat 同步抛 ApprovalPendingException（web 层 Task 6 映射 409），
+     *  先于建流/建 turn——避免同一会话两个未决审批的 checkpoint 竞态 */
+    @Test
+    void chatWhenApprovalPendingThrowsBeforeStreaming() {
+        Conversation conv = conversations.seed(null);
+        turns.save(new Turn(null, conv.id(), 1, "WAITING_APPROVAL", null, null, Instant.now(), null));
+
+        assertThatThrownBy(() -> facade.chat(conv.id(), "再问一句"))
+            .isInstanceOf(ApprovalPendingException.class);
+
+        // 抛出先于 agent 构建：桩 agent 从未被创建
+        assertThat(capturedAgent).isNull();
+    }
+
+    /** 中断路径（spike 结论 A：流尾元素为 InterruptionMetadata，流正常 complete）：
+     *  发 ApprovalRequest（items 完整、turnId/conversationId 齐）、跳过 TurnDone、
+     *  turn 落 WAITING_APPROVAL（finishedAt=null）、pending 项 TOOL_CALL 行先于事件落库 */
+    @Test
+    void interruptedTurnEmitsApprovalRequestSkipsTurnDoneAndPersistsPendingToolCalls() {
+        Conversation conv = conversations.seed(null);
+        stubMainFlux = Flux.just(stubStreamingOutput("回"),
+            stubApprovalInterruption(pendingShellItem()));
+
+        StepVerifier.create(facade.chat(conv.id(), "删文件"))
+            .expectNextMatches(e -> e instanceof AgentEvent.Meta)
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta d && d.content().equals("回"))
+            .expectNextMatches(e -> e instanceof AgentEvent.ApprovalRequest ar
+                && ar.conversationId().equals(conv.id())
+                && ar.items().size() == 1
+                && ar.items().get(0).callId().equals("call-9")
+                && ar.items().get(0).toolName().equals("shell")
+                && ar.items().get(0).arguments().equals("{\"command\":\"rm -rf /tmp/x\"}"))
+            .verifyComplete(); // 无 TurnDone：中断路径以 ApprovalRequest 收尾
+
+        Optional<Turn> turn = turns.findTopByConversationIdOrderBySeqDesc(conv.id());
+        assertThat(turn).isPresent();
+        assertThat(turn.get().status()).isEqualTo("WAITING_APPROVAL");
+        assertThat(turn.get().finishedAt()).isNull();
+
+        List<Message> saved = messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id());
+        assertThat(saved).extracting(Message::msgType).containsExactly("USER", "TEXT", "TOOL_CALL");
+        Message toolCall = saved.get(2);
+        assertThat(toolCall.callId()).isEqualTo("call-9");
+        assertThat(toolCall.toolName()).isEqualTo("shell");
+        // arguments 落模型原始 JSON（审批卡片回放数据源），非引擎提取后的 payload
+        assertThat(toolCall.arguments()).isEqualTo("{\"command\":\"rm -rf /tmp/x\"}");
+    }
+
+    /** Cancel 交互：中断已落 WAITING_APPROVAL 后订阅方断连 → 转 FAILED
+     *  （CANCELLED_WHILE_WAITING），不遗留等待轮锁死 409 前置检查 */
+    @Test
+    void chatCancelWhileWaitingApprovalMarksTurnFailed() {
+        Conversation conv = conversations.seed(null);
+        // 中断为流尾元素，但其后挂 never 制造 CANCEL 窗口（SSE 断连场景）
+        stubMainFlux = Flux.just(stubStreamingOutput("回"), stubApprovalInterruption(pendingShellItem()))
+            .concatWith(Flux.never());
+
+        StepVerifier.create(facade.chat(conv.id(), "删文件"))
+            .expectNextMatches(e -> e instanceof AgentEvent.Meta)
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta)
+            .expectNextMatches(e -> e instanceof AgentEvent.ApprovalRequest)
+            .thenCancel()
+            .verify();
+
+        Optional<Turn> turn = turns.findTopByConversationIdOrderBySeqDesc(conv.id());
+        assertThat(turn).isPresent();
+        assertThat(turn.get().status()).isEqualTo("FAILED");
+        assertThat(turn.get().finishReason()).isEqualTo("CANCELLED_WHILE_WAITING");
+    }
+
+    /** 非 ApprovalHook 产生的中断（metadata 无待审批项）：按普通输出丢弃，
+     *  正常收 TurnDone——防御性回退，不因未知中断形态吞掉正常收尾 */
+    @Test
+    void nonApprovalInterruptionFallsThroughToTurnDone() {
+        Conversation conv = conversations.seed(null);
+        stubMainFlux = Flux.just(stubStreamingOutput("回"),
+            InterruptionMetadata.builder("_AGENT_HOOK_HITL", new OverAllState()).build());
+
+        StepVerifier.create(facade.chat(conv.id(), "你好"))
+            .expectNextMatches(e -> e instanceof AgentEvent.Meta)
+            .expectNextMatches(e -> e instanceof AgentEvent.MessageDelta)
+            .expectNextMatches(e -> e instanceof AgentEvent.TurnDone)
+            .verifyComplete();
+
+        assertThat(turns.findTopByConversationIdOrderBySeqDesc(conv.id()).orElseThrow().status())
+            .isEqualTo("COMPLETED");
+    }
+
+    /** 桩：一个待审批 shell 项（引擎 NEEDS_APPROVAL 形态，arguments 为模型原始 JSON） */
+    private static PermissionRuleEngine.PendingItem pendingShellItem() {
+        return new PermissionRuleEngine.PendingItem("call-9", "shell",
+            "{\"command\":\"rm -rf /tmp/x\"}", "rm -rf /tmp/x",
+            List.of(new PermissionRuleEngine.SubVerdict("rm -rf /tmp/x", false, null)), "rm *");
+    }
+
+    /**
+     * 桩：审批中断形态输出（InterruptionMetadata 为 final 不可 mock，经 builder 构造真实实例）。
+     * 与 ApprovalHook.buildInterruptionMetadata 同构：node=_AGENT_HOOK_HITL、待审批项经
+     * {@link ApprovalHook#PENDING_ITEMS_METADATA_KEY} 挂 metadata、逐项 ToolFeedback。
+     */
+    private com.alibaba.cloud.ai.graph.NodeOutput stubApprovalInterruption(
+            PermissionRuleEngine.PendingItem... items) {
+        InterruptionMetadata.Builder builder = InterruptionMetadata
+            .builder("_AGENT_HOOK_HITL", new OverAllState())
+            .addMetadata(ApprovalHook.PENDING_ITEMS_METADATA_KEY, List.of(items));
+        for (PermissionRuleEngine.PendingItem item : items) {
+            builder.addToolFeedback(InterruptionMetadata.ToolFeedback.builder()
+                .id(item.callId()).name(item.toolName()).arguments(item.arguments()).build());
+        }
+        return builder.build();
+    }
+
     @Test
     void displayStorageOnlyAppendsNeverRemoves() {
         Conversation conv = conversations.seed(null);
@@ -395,6 +514,10 @@ class AgentFacadeTest {
         @Override public List<Turn> findByConversationIdOrderBySeqAsc(Long conversationId) {
             return data.stream().filter(t -> t.conversationId().equals(conversationId))
                 .sorted(java.util.Comparator.comparing(Turn::seq)).toList();
+        }
+        @Override public boolean existsByConversationIdAndStatus(Long conversationId, String status) {
+            return data.stream().anyMatch(t -> t.conversationId().equals(conversationId)
+                && status.equals(t.status()));
         }
     }
 

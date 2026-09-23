@@ -2,10 +2,13 @@ package com.linagent.agent.facade;
 
 import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.alibaba.cloud.ai.graph.action.InterruptionMetadata;
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.linagent.agent.agent.AgentFactory;
 import com.linagent.agent.agent.EventEmittingToolInterceptor;
+import com.linagent.agent.approval.ApprovalHook;
+import com.linagent.agent.approval.PermissionRuleEngine;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
 import com.linagent.agent.persistence.po.Conversation;
@@ -34,6 +37,10 @@ import java.util.concurrent.atomic.AtomicReference;
  *    发已构造的 ToolCall/ToolResult 事件对象，本类 map 时区分两种载荷；
  * 2. main（agent.stream 的 Flux&lt;NodeOutput&gt;）—— LLM 节点流式 chunk → MessageDelta；
  * 3. 收尾 —— main 流 concatWith 发 TurnDone（含 usage、turn COMPLETED、会话 touch）。
+ *
+ * 审批中断（Task 5，spike 结论 A）：main 流尾元素为 InterruptionMetadata 时走中断分支——
+ * 发 ApprovalRequest 流尾事件、turn 停在 WAITING_APPROVAL、跳过 TurnDone；会话存在
+ * 未决等待轮时 chat 前置抛 ApprovalPendingException（先决议后继续）。
  *
  * side sink 的 complete 由 main 流终止时触发（doFinally），外层 doFinally 仅兜底，
  * 避免 merge 因 side 永不终止而悬挂。
@@ -64,6 +71,12 @@ public class AgentFacade {
         AuthContext ctx = AuthContextHolder.require();
         // 归属预检同步抛出：HTTP 404（GlobalExceptionHandler 映射）先于 SSE 建流
         conversations.requireOwned(conversationId, ctx.tenantId(), ctx.userId());
+        // 审批未决前置（Task 5，web 层 Task 6 映射 409）：存在 WAITING_APPROVAL 轮即拒绝
+        // 新消息——先决议后继续，避免同会话两个未决审批的 checkpoint 竞态
+        // （resume 依赖 threadId 最新 checkpoint 的 nextNodeId）
+        if (turns.existsByConversationIdAndStatus(conversationId, "WAITING_APPROVAL")) {
+            throw new ApprovalPendingException(conversationId);
+        }
         return Flux.defer(() -> {
             // 历史由 checkpoint 恢复（AppendStrategy 合并当前输入）；压缩在
             // SummarizingModelHook（BEFORE_MODEL）按真实消息触发，facade 不再预压缩
@@ -75,10 +88,13 @@ public class AgentFacade {
             messages.save(Message.user(turn.id(), 0, content));
 
             SegmentBuffer buffer = new SegmentBuffer(turn.id(), messages);
-            // 终态收口 once-guard（fix round 1）：flushAll→终态落库在 完成/异常/取消 三条
-            // 路径中只执行一次——CANCEL 与末条 TurnDone 发射竞态时不会把 COMPLETED 覆写为
+            // 终态收口 once-guard（fix round 1）：flushAll→终态落库在 完成/异常/取消/中断
+            // 四条路径中只执行一次——CANCEL 与末条 TurnDone 发射竞态时不会把 COMPLETED 覆写为
             // FAILED；flushAll 的跨线程原子性由 SegmentBuffer 自身 synchronized 保证
             AtomicBoolean finalized = new AtomicBoolean(false);
+            // 审批中断标记（Task 5）：流尾 InterruptionMetadata 携带待审批项时置位，
+            // TurnDone 收尾段据此跳过（流以 ApprovalRequest 收尾，turn 停在 WAITING_APPROVAL）
+            AtomicBoolean interrupted = new AtomicBoolean(false);
             // 三路发射方（ThinkingTap / 工具拦截器，SAA 并行 tool call 时多线程）共享同一
             // unicast sink：经 SerializedEmitSink 串行收口，避免 FAIL_NON_SERIALIZED 静默丢事件
             Sinks.Many<Object> sideEvents =
@@ -87,7 +103,8 @@ public class AgentFacade {
 
             EventEmittingToolInterceptor toolInterceptor =
                 new EventEmittingToolInterceptor(sideEvents, buffer, turn.id());
-            AgentFactory.AgentHandle handle = agentFactory.create(ctx, sideEvents, usageCapture, toolInterceptor);
+            AgentFactory.AgentHandle handle =
+                agentFactory.create(ctx, conversationId, sideEvents, usageCapture, toolInterceptor);
 
             RunnableConfig config = RunnableConfig.builder()
                 .threadId(conv.threadId())
@@ -112,8 +129,20 @@ public class AgentFacade {
             }
 
             Flux<AgentEvent> main = nodeOutputs
-                .concatMap(nodeOutput -> mapNodeOutput(nodeOutput, turn.id(), buffer))
+                .concatMap(nodeOutput -> {
+                    // 审批中断检测（spike 结论 A：中断即流的最后元素为 InterruptionMetadata，
+                    // 流随后正常 complete）：待审批项经 metadata 反解，走中断分支收尾
+                    if (nodeOutput instanceof InterruptionMetadata md) {
+                        return onApprovalInterruption(md, turn, conv, buffer, interrupted, finalized);
+                    }
+                    return mapNodeOutput(nodeOutput, turn.id(), buffer);
+                })
                 .concatWith(Flux.defer(() -> {
+                    if (interrupted.get()) {
+                        // 中断路径不收 TurnDone（流以 ApprovalRequest 收尾）；turn 终态
+                        // 已由中断分支落 WAITING_APPROVAL，等待审批决议（Task 6 resume 补终态）
+                        return Flux.empty();
+                    }
                     // usage 在 complete 之前取值：ThinkingTap 捕获的最后一包 metadata
                     AgentEvent.Usage usage = toUsage(usageCapture.get());
                     if (finalized.compareAndSet(false, true)) {
@@ -137,11 +166,22 @@ public class AgentFacade {
                 // （COMPLETED/ERROR），晚到的 CANCEL 不改写；RUNNING 复核兜底
                 .doFinally(signal -> {
                     sideEvents.tryEmitComplete();
-                    if (signal == SignalType.CANCEL && finalized.compareAndSet(false, true)) {
+                    if (signal != SignalType.CANCEL) {
+                        return;
+                    }
+                    if (finalized.compareAndSet(false, true)) {
                         buffer.flushAll();
                         turns.findById(turn.id())
                             .filter(t -> "RUNNING".equals(t.status()))
                             .ifPresent(t -> turns.save(t.fail("CANCELLED")));
+                    }
+                    else {
+                        // finalized 已被中断分支消费（turn 已落 WAITING_APPROVAL）而订阅方
+                        // 仍断连：等待轮直接转 FAILED，否则 409 前置检查永久锁死该会话。
+                        // COMPLETED/FAILED 终态被 filter 拦下——once-guard 语义不变
+                        turns.findById(turn.id())
+                            .filter(t -> "WAITING_APPROVAL".equals(t.status()))
+                            .ifPresent(t -> turns.save(t.fail("CANCELLED_WHILE_WAITING")));
                     }
                 });
 
@@ -168,6 +208,35 @@ public class AgentFacade {
             }
         }
         return Flux.empty();
+    }
+
+    /**
+     * 审批中断分支（Task 5）。落库序：逐项 {@code recordToolCall}（审批卡片数据先于事件持久，
+     * arguments 为模型原始 JSON）→ {@code flushAll} → turn WAITING_APPROVAL（finishedAt=null，
+     * 非终态）→ 流尾发 {@link AgentEvent.ApprovalRequest}；TurnDone 收尾段据 interrupted 跳过。
+     *
+     * <p>finalized once-guard 参与抢占：CANCEL 先到（已按 RUNNING 落 FAILED）时本分支整体
+     * 放弃，不覆写终态。非 ApprovalHook 产生的中断（verdictFrom 无待审批项）按普通输出
+     * 丢弃，走正常 TurnDone 收尾——防御性回退。
+     */
+    private Flux<AgentEvent> onApprovalInterruption(InterruptionMetadata interruptionMetadata, Turn turn,
+                                                    Conversation conv, SegmentBuffer buffer,
+                                                    AtomicBoolean interrupted, AtomicBoolean finalized) {
+        PermissionRuleEngine.Verdict verdict = ApprovalHook.verdictFrom(interruptionMetadata);
+        if (!verdict.needsApproval()) {
+            return Flux.empty();
+        }
+        interrupted.set(true);
+        if (!finalized.compareAndSet(false, true)) {
+            // CANCEL 已抢先收尾（turn FAILED）：不落 WAITING_APPROVAL 覆写终态，也不发事件
+            return Flux.empty();
+        }
+        for (PermissionRuleEngine.PendingItem item : verdict.items()) {
+            buffer.recordToolCall(item.callId(), item.toolName(), item.arguments());
+        }
+        buffer.flushAll();
+        turns.save(turns.findById(turn.id()).orElse(turn).waitingApproval());
+        return Flux.just(new AgentEvent.ApprovalRequest(turn.id(), conv.id(), verdict.items()));
     }
 
     /** usage 形态：ThinkingTap 捕获的 ChatResponse metadata（Spring AI Usage），缺失时归零 */
