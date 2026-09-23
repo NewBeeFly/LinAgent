@@ -1,7 +1,7 @@
 # LinAgent 工具审批（HITL Approval）设计文档
 
 - 日期：2026-09-23
-- 状态：已与需求方逐节确认（命令级粒度 / 用户级持久化+session 双作用域 / 409 模态 / 方案 B）
+- 状态：已实施（feat/approval-hitl，实施计划 docs/superpowers/plans/2026-09-23-approval-hitl.md）
 - 路径：Architectural（新子系统：贯穿 agent 执行中断、规则引擎、SSE 协议、前端交互）
 - 后续：本文档确认后，经 superpowers:writing-plans 产出实施计划，分支 `feat/approval-hitl` 迭代
 

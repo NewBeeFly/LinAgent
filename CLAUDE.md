@@ -34,7 +34,7 @@ mvn -pl agent install -DskipTests && mvn -pl web spring-boot:run
 
 Maven 三模块 + 前端独立目录：
 
-- `agent/`：引擎库（不依赖 web）。对外唯一门面 `AgentFacade.chat(conversationId, content) → Flux<AgentEvent>`（sealed 接口，七类事件）。`web/` 只做 `AgentEvent → SSE` 协议转换（SseEventMapper），零持久化职责。
+- `agent/`：引擎库（不依赖 web）。对外唯一门面 `AgentFacade.chat(conversationId, content)` / `resume(conversationId, feedback)` → `Flux<AgentEvent>`（sealed 接口，八类事件）。`web/` 只做 `AgentEvent → SSE` 协议转换（SseEventMapper），零持久化职责。
 - `web/`：唯一可启动模块（`WebApplication`，scanBasePackages + `@EnableJdbcRepositories` 指向 agent 的 persistence 包）。
 - `frontend/`：Vue3 + Vite + TS。`turn.ts` 是实时 SSE 与历史回放共用的纯逻辑层（事件分区/工具按 callId 合并）。
 - `skills/`：仓库根目录（不在 jar 里）。frontmatter `resident: true` 的常驻技能全文注入 system prompt 静态区；其余经 `FilteredSkillRegistry` 交给 SAA `SkillsAgentHook` 渐进披露（模型调 `read_skill` 按需加载）。frontmatter 由自研 `SkillManifestScanner` 解析（SAA 的 SkillMetadata 不含自定义字段）。
@@ -47,7 +47,7 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 `{agent.workspace-root}/{tenant}/users/{user}`，根内 `shared` 符号链接挂载租户共享区
 （WorkspaceResolver 幂等 provision）。conversation 按 (tenant_id, user_id) 隔离，非属主 404。
 前端身份走 VITE_TENANT_ID/VITE_USER_ID（缺省 default/linmj）。
-- 已知边界：shell 工具仅以个人根为 cwd，无 OS 级沙箱——跨用户/跨租户文件可经 shell 命令访问；文件级隔离由 read_file/write_file/list_dir 的越界校验承担。多用户生产化前须补 shell 策略（deny-by-default / 按用户禁用）。
+- 已知边界：shell 工具仅以个人根为 cwd，无 OS 级沙箱——跨用户/跨租户文件可经 shell 命令访问；文件级隔离由 read_file/write_file/list_dir 的越界校验承担。多用户生产化前须补 shell 策略（deny-by-default / 按用户禁用）。审批规则（见「工具审批 HITL」）同理**非安全边界**——匹配基于命令文本，`bash -c`、`/bin/rm` 等可绕过前缀规则；不依赖命令文本的强制隔离须 OS 级沙箱（spec 非目标）。
 
 ### 事件流核心（AgentFacade，改这里先读懂）
 
@@ -55,7 +55,7 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 
 并发约束（有 8×200 并发用例守护）：**所有事件发射必须经 `SerializedEmitSink`**（unicast sink 非线程安全）；**SegmentBuffer 全方法 synchronized + AtomicInteger seq**（recordToolCall 的 flush+save+seq 分配必须在同一临界区）。锁序单向：sink → buffer，无反向嵌套。
 
-每轮对话构建新 ReactAgent 实例（AgentFactory），saver/技能注册表为共享 Bean；工具每轮构造（v0.2 个人根烤入，见「身份与工作区」）。
+每轮对话构建新 ReactAgent 实例（AgentFactory），saver/技能注册表为共享 Bean；工具每轮构造（v0.2 个人根烤入，见「身份与工作区」）；审批 hook 与规则引擎同样随轮构造（见「工具审批 HITL」）。
 
 ### 持久化分工（容易搞混）
 
@@ -74,6 +74,13 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
   （NOT NULL 列））；`CompactionSummarySink` 为跨会话接力预留（MVP LoggingSummarySink）。
   已实证坑：`AgentCommand.getMessages()` 包私有——hook 核心逻辑须收在包可见 `compact()` 供单测。
 
+### 工具审批 HITL（approval 包）
+
+- 判定引擎 `PermissionRuleEngine`（纯逻辑无 IO，每轮随 userRules 查库新建）：评估序 **BUILTIN 白名单（shell 只读 20 命令）→ session（`InMemorySessionRules`，key=tenant:user:conv:tool）→ user（permission_rule 表 V6，UNIQUE 四键冲突安全落库）→ 待审批**，命中即放行。`*` 段通配（`pip install *` 命中 `pip install pandas`、不命中 `pip installx`）；复合命令按 `&&/||/;/|` 拆段**全命中才放行**；段含 `>`/`<`/`$(`/反引号/`find -delete|-exec` 即丧失 BUILTIN 资格（fail-safe 落审批）；read_file/list_dir/csv_summary/read_skill 恒放行（越界校验归工具层）。
+- `ApprovalHook`（抄 SAA `HumanInTheLoopHook` 骨架、判定层换引擎；每轮随 AgentFactory 构造，非 Bean）：工具节点前 `interrupt()` 判定 → 中断（checkpoint 持久化）→ 流尾 `AgentEvent.ApprovalRequest`（**不发 TurnDone**）+ 待审批 TOOL_CALL 提前落 message 表 + turn.status=WAITING_APPROVAL（V7 放宽 turn_status_check）。
+- resume：`POST /api/conversations/{id}/approvals` 整批 per-callId 决策 + remember once|session|forever（forever 服务端按 `suggestPattern` 重算落库）→ `agent.stream(Map.of(), config.addMetadata(HUMAN_FEEDBACK_METADATA_KEY, InterruptionMetadata))` 续流 SSE（续跑再中断则再发 ApprovalRequest，递归语义）；`GET .../approvals` 刷新恢复；chat 遇 WAITING_APPROVAL → 409（先决议后继续）；`/api/permission-rules` CRUD 三端点；前端 ApprovalCard / 409 横幅 / 设置页（哈希路由 `#/settings/permissions`）。
+- 拒绝语义：REJECTED+理由作为 tool result 回传模型（SAA 内置文案），模型据此调整方案自然收尾；审批对模型透明（从不询问模型）。
+
 ## 实证过的坑（SAA 1.1.2.3 / Spring AI 1.1.2，勿凭记忆推翻）
 
 - 依赖栈是**精简版 spring-ai-model**：`ToolCallbacks.from()` 不存在 → 用 `MethodToolCallbackProvider.builder().toolObjects(obj).build().getToolCallbacks()`。
@@ -86,6 +93,9 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 - system prompt 模板（`agent/src/main/resources/prompts/system-prompt.md`）**启动时缓存**（ResidentPromptBuilder），改完必须重启后端才生效。
 - `mvn -pl web spring-boot:run` fork 出的 JVM **工作目录是 web 模块目录**：`agent.skills-root`/`agent.workspace-root` 这类相对路径配置裸解析会落到 `web/skills`（不存在）导致 0 技能加载（0 技能时模型会幻觉编造技能名）。必须经 `ProjectPathResolver.resolveDir`（cwd → 父目录上溯一级）解析，直接 `Path.of(相对路径)` 是回归。
 - @WebMvcTest 切片会自动装配 Filter 类型 Bean：AuthContextFilter 落地后所有 @WebMvcTest 必须 @MockBean RequestAuthenticator 并打桩（返回 TestAuth.LINMJ_CTX），否则 401/上下文失败。
+- `ReactAgent.initGraph` 只对**具体类型** `HumanInTheLoopHook`/`InterruptionHook` 把 hook 实例注册为节点 action（实现 InterruptableAction，apply 前会调 `interrupt()`）；其余自定义 ModelHook 一律被 lambda 包装（仅 afterModel）→ `interrupt()` **永不触发**——审批静默失效、工具直执行，无任何报错。修复：`AgentFactory.registerInterruptibleApprovalNode`——图编译后反射换 `CompiledGraph.nodeFactories` 中该节点的 action 为 hook 本体（节点名按 `getFullHookName` 前缀定位、不硬编码位置后缀；找不到节点/反射失败一律响亮抛 ISE——静默降级=审批整体失效）；`ApprovalEndToEndTest` E2E 守护。`HumanInTheLoopHook` 构造器 private 无法继承。**SAA 升级必须回归此点**。
+- checkpoint 续跑（resume 的 stream）不经过 BEFORE_AGENT 节点 → `ShellToolAgentHook` 的 shell 会话未初始化，续跑首个 shell 调用报 "Shell session not initialized"。修复：`AgentHandle.resumePrimer`（resume 开流前 `shellTool.getSessionManager().initialize(config)` 幂等补齐；chat 路径 no-op）。
+- resume 的 `agent.stream()` 第一参必须 `Map.of()`——传 UserMessage 会产生乱序幻影消息污染历史（spike 结论 B，SaaInterruptionSpikeTest 实证）。
 
 ## 代码结构与风格约束（新增代码必读，评审对照）
 
