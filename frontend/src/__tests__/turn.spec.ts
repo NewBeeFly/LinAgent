@@ -124,6 +124,74 @@ describe('响应式触发（回归：流式增量必须驱动重渲染）', () =
   })
 })
 
+describe('审批中断（approval_request 事件）', () => {
+  const pendingItem = {
+    callId: 'c1', toolName: 'shell', arguments: '{"command":"mkdir demo"}', payload: 'mkdir demo',
+    subVerdicts: [{ segment: 'mkdir demo', allowed: false, source: null }],
+    suggestedRule: 'mkdir demo *',
+  }
+
+  it('approval_request 归入 approval 分区，状态置 waitingApproval（流尾无 turn_done，不置 done）', () => {
+    const turn = newTurn('建目录')
+    applySseEvent(turn, { event: 'approval_request', data: { turnId: 7, conversationId: 1, items: [pendingItem] } })
+
+    expect(turn.status).toBe('waitingApproval')
+    expect(turn.approval?.turnId).toBe(7)
+    expect(turn.approval?.items).toEqual([pendingItem])
+    expect(turn.approval!.items[0].suggestedRule).toBe('mkdir demo *')
+  })
+
+  it('meta 事件回填轮次 id（409 恢复按 id 定位挂起轮）', () => {
+    const turn = newTurn('你好')
+    applySseEvent(turn, { event: 'meta', data: { turnId: 42, conversationId: 1, model: 'step-3' } })
+    expect(turn.id).toBe(42)
+  })
+
+  it('两段流合并：chat 段中断后，resume 段事件并入同一轮（重复 tool_call 按 callId 去重，turn_done 完成）', () => {
+    const turn = newTurn('建目录')
+    // —— chat 段：思考 → 待审调用 → 流尾 approval_request ——
+    applySseEvent(turn, { event: 'thinking_delta', data: { content: '需要建目录' } })
+    applySseEvent(turn, { event: 'tool_call', data: { callId: 'c1', toolName: 'shell', arguments: '{"command":"mkdir demo"}' } })
+    applySseEvent(turn, { event: 'approval_request', data: { turnId: 7, conversationId: 1, items: [pendingItem] } })
+    expect(turn.status).toBe('waitingApproval')
+
+    // —— resume 段（同 turnId 新 SSE 流）：meta → 同 callId 执行轨迹 → 结果 → 正文 → 收尾 ——
+    applySseEvent(turn, { event: 'meta', data: { turnId: 7, conversationId: 1 } })
+    applySseEvent(turn, { event: 'tool_call', data: { callId: 'c1', toolName: 'shell', arguments: '{"command":"mkdir demo"}' } })
+    applySseEvent(turn, { event: 'tool_result', data: { callId: 'c1', result: 'ok', success: true, durationMs: 3 } })
+    applySseEvent(turn, { event: 'message_delta', data: { content: '已创建' } })
+    applySseEvent(turn, { event: 'turn_done', data: { finishReason: 'STOP' } })
+
+    expect(turn.status).toBe('done')
+    expect(turn.tools).toHaveLength(1) // 同 callId 去重合并，不产生重复工具卡
+    expect(turn.tools[0]).toMatchObject({ callId: 'c1', result: 'ok', success: true, durationMs: 3 })
+    expect(turn.text).toBe('已创建')
+    expect(turn.thinking).toBe('需要建目录')
+  })
+
+  it('waitingApproval 轮再收 turn_done → 状态流转完成', () => {
+    const turn = newTurn('你好')
+    applySseEvent(turn, { event: 'approval_request', data: { turnId: 1, conversationId: 1, items: [pendingItem] } })
+    applySseEvent(turn, { event: 'turn_done', data: {} })
+    expect(turn.status).toBe('done')
+  })
+})
+
+describe('审批中断的历史回放（select 路径）', () => {
+  it('WAITING_APPROVAL 轮回放为 waitingApproval 挂起态（卡片数据由 GET /approvals 补齐）', () => {
+    const turn = turnFromRecord({
+      id: 9, seq: 2, status: 'WAITING_APPROVAL', finishReason: undefined,
+      messages: [
+        { seq: 0, msgType: 'USER', content: '建目录' },
+        { seq: 1, msgType: 'TOOL_CALL', callId: 'c1', toolName: 'shell', arguments: '{"command":"mkdir demo"}' },
+      ],
+    })
+    expect(turn.id).toBe(9)
+    expect(turn.status).toBe('waitingApproval')
+    expect(turn.tools).toHaveLength(1)
+  })
+})
+
 describe('thinkingActive（思考折叠块展开态）', () => {
   it('思考中（流式且无正文）为 true——默认展开', async () => {
     const { thinkingActive } = await import('../turn')
