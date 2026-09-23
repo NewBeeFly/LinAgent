@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, reactive, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, reactive, watch } from 'vue'
 import { streamSse } from './api/sse'
 import { createConversation, fetchIdentityOptions, getPendingApproval, getTurns, listConversations } from './api/rest'
 import type { TenantIdentityOptions } from './api/rest'
@@ -11,8 +11,19 @@ import ThinkingBlock from './components/ThinkingBlock.vue'
 import ToolCard from './components/ToolCard.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ApprovalCard from './components/ApprovalCard.vue'
+import PermissionSettings from './views/PermissionSettings.vue'
 
 interface ConversationItem { id: number; title: string; turnCount: number; updatedAt: string }
+
+// 轻量哈希路由（无 vue-router 依赖，单设置页不值得引入）：#/settings/permissions ↔ 权限设置
+const SETTINGS_HASH = '#/settings/permissions'
+const route = ref(window.location.hash === SETTINGS_HASH ? 'settings' : 'chat')
+const syncRoute = () => {
+  route.value = window.location.hash === SETTINGS_HASH ? 'settings' : 'chat'
+}
+const openSettings = () => {
+  window.location.hash = SETTINGS_HASH
+}
 
 const conversations = ref<ConversationItem[]>([])
 const activeId = ref<number | null>(null)
@@ -224,18 +235,24 @@ const fillPrompt = (text: string) => {
 }
 
 onMounted(async () => {
+  window.addEventListener('hashchange', syncRoute)
   // 身份候选与会话列表互不依赖，并行拉取（options 失败仅隐藏切换器，不阻塞启动）
   fetchIdentityOptions()
     .then((opts) => { identityOptions.value = opts })
     .catch(() => { identityOptions.value = [] })
+  // 会话预拉与路由无关：从设置页返回对话时视图即就绪
   await refresh()
   if (conversations.value.length === 0) await newChat()
   else await select(conversations.value[0].id)
 })
+
+onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
 </script>
 
 <template>
-  <div class="layout">
+  <!-- 哈希路由：#/settings/permissions → 设置页；其余 → 对话主视图 -->
+  <PermissionSettings v-if="route === 'settings'" />
+  <div v-else class="layout">
     <button class="menu-btn" @click="sidebarOpen = !sidebarOpen" aria-label="会话列表">☰</button>
 
     <aside class="sidebar" :class="{ open: sidebarOpen }" @click.self="sidebarOpen = false">
@@ -244,6 +261,7 @@ onMounted(async () => {
         <span class="name">LinAgent</span>
       </div>
       <button class="new" @click="newChat">新对话</button>
+      <button class="settings-link" @click="openSettings">权限设置</button>
       <div class="conv-list">
         <div v-for="c in conversations" :key="c.id"
              class="conv" :class="{ active: c.id === activeId }" @click="select(c.id)">
@@ -375,6 +393,17 @@ onMounted(async () => {
 }
 .new:hover { background: var(--pine-soft); }
 .new:disabled { opacity: 0.5; cursor: default; }
+.settings-link {
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  border-radius: var(--radius-md);
+  padding: 6px 0;
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.settings-link:hover { color: var(--pine); }
 .conv-list { overflow-y: auto; flex: 1; }
 .conv {
   display: flex;

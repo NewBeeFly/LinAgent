@@ -49,3 +49,28 @@ export const getPendingApproval = async (conversationId: number): Promise<Pendin
   if (resp.status === 204) return null
   return resp.json()
 }
+
+/** 用户审批规则行（GET/POST /api/permission-rules 响应同形） */
+export interface PermissionRuleItem {
+  id: number
+  toolName: string
+  pattern: string
+  effect: string
+  createdAt: string
+}
+
+export const listPermissionRules = () => json<PermissionRuleItem[]>('/api/permission-rules')
+
+/** 创建规则：tool 仅 shell | write_file；重复规则服务端 409（ApiError.conflict） */
+export const createPermissionRule = (toolName: string, pattern: string) =>
+  json<PermissionRuleItem>('/api/permission-rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ toolName, pattern }),
+  })
+
+/** 删除规则：服务端 (tenant, user, id) 三元收敛，统一 204 无响应体 */
+export const deletePermissionRule = async (id: number) => {
+  const resp = await authedFetch(`/api/permission-rules/${id}`, { method: 'DELETE' })
+  if (!resp.ok) throw await ApiError.from(resp)
+}
