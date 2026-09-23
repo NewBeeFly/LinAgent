@@ -21,7 +21,10 @@ agent:
   skills-root: ./skills
   workspace-root: ./workspace
   compaction:
-    threshold-tokens: 48000
+    # threshold-tokens 不配置（默认 -1）时 = max-context-tokens × trigger-ratio（显式配置优先，
+    # 演示/测试可命令行覆盖：--agent.compaction.threshold-tokens=2000）
+    max-context-tokens: 262144   # step-3.7-flash 上下文窗口 256K
+    trigger-ratio: 0.8           # 估算达窗口 80% 触发压缩
     keep-turns: 20
     summary-timeout-seconds: 60
     chars-per-token: 2
