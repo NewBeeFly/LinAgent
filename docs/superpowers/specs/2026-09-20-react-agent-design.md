@@ -14,7 +14,7 @@
 - 技能体系：项目本地 `skills/` 目录，区分**常驻技能**（全量注入 system prompt）与**渐进式技能**（`read_skill` 按需加载，对标 Claude Code 机制）
 - 工具体系：预置 bash + 文件读写（常驻暴露）；技能专属工具通过 `groupedTools` 绑定技能，**read_skill 后才暴露**（渐进式披露）
 - 数据库 PostgreSQL：多轮会话全量保留，按轮次结构化存储完整消息与工具调用，支持消息压缩
-- 数据库连接：`localhost:5432`，账号 `jiege` / `***REMOVED***`，开发期新建独立库 `javaagent`
+- 数据库连接：`localhost:5432`，账号 `jiege` / `<PG_PASSWORD>`，开发期新建独立库 `javaagent`
 
 ### 非目标（本期不做）
 

@@ -3,9 +3,9 @@
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/linagent
-    username: jiege
-    # 密码走环境变量占位，缺省值仅本机开发库（不入库真实凭据）
-    password: ${DB_PASSWORD:***REMOVED***}
+    username: ${DB_USERNAME:postgres}
+    # 密码走环境变量占位，公开仓库不含个人本机凭据——本地跑 DB 相关测试请 export DB_USERNAME / DB_PASSWORD
+    password: ${DB_PASSWORD:postgres}
   ai:
     openai:
       api-key: ${STEPFUN_API_KEY:}

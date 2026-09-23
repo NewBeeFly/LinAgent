@@ -15,7 +15,7 @@
 - JDK 21；Spring Boot 3.5.3；SAA BOM 1.1.2.3；Spring AI BOM 1.1.2——版本写死，不追新
 - 包名：agent 模块 `com.javaagent.agent.*`，web 模块 `com.javaagent.web.*`
 - 模型：StepFun `step-3.7-flash`，base-url `https://api.stepfun.com/step_plan`（Spring AI 默认拼 `/v1/chat/completions`，与实测一致）；api-key 走环境变量 `STEPFUN_API_KEY` 或 `application-local.yml`（不入 git）
-- PG：`jdbc:postgresql://localhost:5432/javaagent`，账号 `jiege` / `***REMOVED***`（本地 `application-local.yml`，不入 git）
+- PG：`jdbc:postgresql://localhost:5432/javaagent`，账号 `jiege` / `<PG_PASSWORD>`（本地 `application-local.yml`，不入 git）
 - 大文本（system prompt 模板）文件化到 `resources/prompts/`，启动加载缓存；代码不写长字符串
 - 技能目录：仓库根 `./skills`；常驻技能 frontmatter `resident: true`
 - 存储：不存 delta，存完整消息（THINKING/TEXT 按段落，TOOL_CALL/TOOL_RESULT 各一行，`call_id` 关联）
@@ -267,7 +267,7 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/javaagent
     username: jiege
-    password: ***REMOVED***
+    password: <PG_PASSWORD>
   ai:
     openai:
       api-key: 1idjGLL3nmeJzncWgFTAylqqOSoo188SR6O7HFImSlquH0OCvXI3oYQi5cdJpKFKH
@@ -519,7 +519,7 @@ class StepFunStreamingProbeTest {
 cd /Users/newbeefly/Coder/Project/Claude/javaAgent
 mvn -q -pl agent test -Dtest=StepFunStreamingProbeTest -Dgroups=manual \
   -Dspring.profiles.active=local -Dspring.datasource.url=jdbc:postgresql://localhost:5432/javaagent \
-  -Dspring.datasource.username=jiege -Dspring.datasource.password=***REMOVED***
+  -Dspring.datasource.username=jiege -Dspring.datasource.password=<PG_PASSWORD>
 ```
 Expected: 控制台输出各 chunk 的 text/metadata 形态。**人工判断** reasoning_content 落点（候选：output metadata 的 `reasoningContent` 键、或独立字段），把结论回填到 `CONCLUSION` 常量。若 text 与 thinking 无法区分（都为 null 或合并），则确认需要走兜底：见 Step 4 的 metadata 路径优先级。
 
