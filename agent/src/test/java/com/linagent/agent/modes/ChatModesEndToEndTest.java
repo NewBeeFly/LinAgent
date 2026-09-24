@@ -1,9 +1,8 @@
-package com.linagent.agent.approval;
+package com.linagent.agent.modes;
 
-import com.alibaba.cloud.ai.graph.action.InterruptionMetadata;
-import com.alibaba.cloud.ai.graph.action.InterruptionMetadata.ToolFeedback;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
+import com.linagent.agent.conversation.ChatMode;
 import com.linagent.agent.facade.AgentEvent;
 import com.linagent.agent.facade.AgentFacade;
 import com.linagent.agent.persistence.po.Conversation;
@@ -48,20 +47,24 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 端到端（spec §11 第二条落点）：真实全链路——AgentFacade → AgentFactory（真 ReactAgent +
- * ShellTool2 + ApprovalHook + checkpoint）→ Testcontainers PG（会话/消息/规则/checkpoint 全真表），
- * 唯一替身为脚本 ChatModel（@Primary，无外部 LLM 依赖）。
+ * 会话三档 E2E（v0.3 spec §11 第三条落点）：真实全链路——AgentFacade → AgentFactory
+ * 三档构造分支 → Testcontainers PG（会话/轮次/消息/checkpoint 全真表），唯一替身为
+ * 脚本 ChatModel（@Primary）。STANDARD 档（审批中断/批准/拒绝）由
+ * {@code ApprovalEndToEndTest} 守护，此处覆盖另外两档的成对对照：
  *
- * <p>批准路径：非白名单 shell（mkdir）触发中断（ApprovalRequest 流尾、无 TurnDone、
- * turn WAITING_APPROVAL、TOOL_CALL 行提前落库、工具未执行）→ resume(APPROVED) → 工具真实执行
- * （个人工作区目录出现）→ 续流正文 → TurnDone、turn COMPLETED。
- * 对照拒绝路径：resume(REJECTED+reason) → 工具不执行、拒绝文案（含理由）以 tool result 抵达
- * 第二轮模型输入、turn COMPLETED。
+ * <ul>
+ *   <li>{@link ChatMode#AUTO}——免审批：同一 "RUN:mkdir" 输入（STANDARD 档会中断等待审批）
+ *       直接触发工具执行（无 ApprovalRequest、目录真实落地、工具结果回传模型后收口）；</li>
+ *   <li>{@link ChatMode#CHAT}——完全无工具：脚本模型刻意发起 toolCall（同一输入在 AUTO 档
+ *       会真实建目录）——SAA 空工具图无工具节点（model → END 直连），调用不执行、无任何
+ *       工具/审批事件、图单轮直接收口；且模型收到的 system prompt 含纯聊声明
+ *       （spec §2.3：堵住"口头承诺做事"的幻觉）。</li>
+ * </ul>
  *
- * <p>复用 SaaInterruptionSpikeTest 容器模式 + CheckpointRestartTest 的 PostgresSaver 直连姿势
- * （saver 由 AgentBeansConfig 以 CREATE_NONE 装配，表由 sql.init 的 V2 建）。
+ * <p>容器/桩模式复用 ApprovalEndToEndTest（E2eBoot 组合根 + ScriptedModel 按调用录制
+ * 全部消息文本——CHAT 档据此断言 prompt 声明送达模型）。
  */
-@SpringBootTest(classes = ApprovalEndToEndTest.E2eBoot.class, properties = {
+@SpringBootTest(classes = ChatModesEndToEndTest.E2eBoot.class, properties = {
     // 测试 schema 全量初始化（跳过 V4 app_user：agent 模块无鉴权链，AuthContext 直设）
     "spring.sql.init.mode=always",
     "spring.sql.init.schema-locations=classpath:db/migration/V1__init.sql,"
@@ -75,16 +78,15 @@ import static org.assertj.core.api.Assertions.assertThat;
     "spring.ai.openai.api-key=e2e-placeholder"
 })
 @Testcontainers
-class ApprovalEndToEndTest {
+class ChatModesEndToEndTest {
 
     /**
-     * 测试专用组合根（镜像 WebApplication 的装配姿势）：TestApplication 无 @ComponentScan
-     * （探针测试只吃自动装配），全链路 bean 须在此显式扫描；仓储接口在 persistence 包，
-     * 自动配置默认只扫本配置类所在包——@EnableJdbcRepositories 显式指路。scripted
-     * ChatModel 以 @Primary 接管全部注入点（AgentFactory/SummarizingModelHook）。
+     * 测试专用组合根（镜像 WebApplication 的装配姿势，同 ApprovalEndToEndTest）：
+     * 全链路 bean 显式扫描 + persistence 仓储指路，scripted ChatModel @Primary 接管
+     * 全部注入点（AgentFactory/SummarizingModelHook）。
      *
-     * <p>扫描排除测试类：classpath 上 test-classes 与 main 同包树，不排除会扫进其他
-     * 测试的嵌套组合根（如 ChatModesEndToEndTest$E2eBoot 的同名 @Primary
+     * <p>扫描排除测试类：classpath 上 test-classes 与 main 同包树，不排除会扫进
+     * 其他测试的嵌套组合根（ApprovalEndToEndTest$E2eBoot 的同名 @Primary
      * scriptedChatModel Bean 冲突）；本类经 classes= 显式注册，不受自身过滤影响。
      */
     @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
@@ -108,9 +110,9 @@ class ApprovalEndToEndTest {
     static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine")
         .withUrlParam("stringtype", "unspecified");
 
-    /** 独立工作区/技能目录（静态初始化先于 @DynamicPropertySource） */
-    static final Path workspaceRoot = createDir("e2e-approval-workspace");
-    static final Path skillsRoot = createDir("e2e-approval-skills");
+    /** 独立工作区/技能目录（静态初始化先于 @DynamicPropertySource；与审批 E2E 互不串扰） */
+    static final Path workspaceRoot = createDir("e2e-modes-workspace");
+    static final Path skillsRoot = createDir("e2e-modes-skills");
 
     static Path createDir(String prefix) {
         try {
@@ -155,138 +157,105 @@ class ApprovalEndToEndTest {
         AuthContextHolder.clear();
     }
 
-    /** 两段式落库（threadId=conv-{id} 硬契约，与 ConversationController 同款） */
-    private Conversation newConversation(String title) {
+    /** 两段式落库（threadId=conv-{id} 硬契约），mode 直写会话行（v0.3 档位种子） */
+    private Conversation newConversation(String title, ChatMode mode) {
         Conversation first = conversations.save(
             Conversation.create(title, "pending-" + System.nanoTime(), CTX.tenantId(), CTX.userId(), Instant.now()));
         return conversations.save(new Conversation(first.id(), first.title(),
             "conv-" + first.id(), null, 0, first.tenantId(), first.userId(),
-            first.mode(), first.createdAt(), first.updatedAt()));
+            mode.name(), first.createdAt(), first.updatedAt()));
     }
 
     @Test
-    void endToEndChatInterruptResumeApproveCompletesTurn() {
-        Conversation conv = newConversation("E2E 批准路径");
+    void autoModeExecutesShellDirectlyWithoutApprovalGate() {
+        Conversation conv = newConversation("E2E AUTO 直执行", ChatMode.AUTO);
         Path personalRoot = workspaceResolver.personalRoot(CTX.tenantId(), CTX.userId());
-        Path createdDir = personalRoot.resolve("demo");
+        Path createdDir = personalRoot.resolve("auto_demo");
         assertThat(createdDir).doesNotExist();
 
-        // 第一段：跑至中断（mkdir 非白名单 → ApprovalHook 中断）
-        List<AgentEvent> events = facade.chat(conv.id(), "RUN:mkdir demo")
+        // 同一 "RUN:mkdir" 输入：STANDARD 档中断等审批（ApprovalEndToEndTest），
+        // AUTO 档 ApprovalHook 整体缺席——工具直执行、流自然收口
+        List<AgentEvent> events = facade.chat(conv.id(), "RUN:mkdir auto_demo")
             .collectList().block(Duration.ofSeconds(120));
 
-        AgentEvent.ApprovalRequest approval = events.stream()
-            .filter(AgentEvent.ApprovalRequest.class::isInstance)
-            .map(AgentEvent.ApprovalRequest.class::cast)
-            .findFirst().orElseThrow(() -> new AssertionError("未收到 ApprovalRequest，事件: " + events));
-        // 无 TurnDone（中断以 ApprovalRequest 收尾）
-        assertThat(events).noneMatch(AgentEvent.TurnDone.class::isInstance);
+        // 免审批：全程无 ApprovalRequest，也不停在等待态
+        assertThat(events).noneMatch(AgentEvent.ApprovalRequest.class::isInstance);
 
-        var item = approval.items().get(0);
-        assertThat(item.callId()).isEqualTo("call-1");
-        assertThat(item.toolName()).isEqualTo("shell");
-        assertThat(item.payload()).isEqualTo("mkdir demo");
-        assertThat(item.suggestedRule()).isEqualTo("mkdir demo *");
-        // 中断发生在工具执行之前
-        assertThat(createdDir).doesNotExist();
-
-        // turn 停 WAITING_APPROVAL；TOOL_CALL 行提前落库（审批卡片数据源）
-        Turn waiting = turns.findById(approval.turnId()).orElseThrow();
-        assertThat(waiting.status()).isEqualTo("WAITING_APPROVAL");
-        List<Message> rows = messages.findByTurnIdOrderBySeq(approval.turnId());
-        assertThat(rows).extracting(Message::msgType).containsExactly("USER", "TOOL_CALL");
-        assertThat(rows.get(1).callId()).isEqualTo("call-1");
-        assertThat(rows.get(1).toolName()).isEqualTo("shell");
-
-        // 第二段：决议批准 → resume 续跑
-        InterruptionMetadata feedback = InterruptionMetadata.builder(ApprovalHook.HITL_NODE_FULL_NAME, null)
-            .addToolFeedback(ToolFeedback.builder()
-                .id(item.callId()).name(item.toolName()).arguments(item.arguments())
-                .result(ToolFeedback.FeedbackResult.APPROVED).build())
-            .build();
-        List<AgentEvent> resumeEvents = facade.resume(conv.id(), feedback)
-            .collectList().block(Duration.ofSeconds(120));
-
-        // 工具真实执行（interceptor 发 ToolCall/ToolResult 事件，成功回传）
-        AgentEvent.ToolResult toolResult = resumeEvents.stream()
+        // 工具真实执行（拦截器发 ToolCall/ToolResult 事件，成功回传，目录落地）
+        AgentEvent.ToolResult toolResult = events.stream()
             .filter(AgentEvent.ToolResult.class::isInstance)
             .map(AgentEvent.ToolResult.class::cast)
-            .findFirst().orElseThrow(() -> new AssertionError("批准后未见工具执行，事件: " + resumeEvents));
+            .findFirst().orElseThrow(() -> new AssertionError("AUTO 档未见工具执行，事件: " + events));
         assertThat(toolResult.callId()).isEqualTo("call-1");
         assertThat(toolResult.success()).isTrue();
         assertThat(createdDir).isDirectory();
 
-        // 续流正文 → TurnDone(COMPLETED)，turn 终态 COMPLETED
-        assertThat(resumeEvents.stream().filter(AgentEvent.MessageDelta.class::isInstance))
-            .isNotEmpty();
-        List<AgentEvent.TurnDone> dones = resumeEvents.stream()
+        // 工具结果回传模型（第二轮模型输入含 shell 输出）→ 脚本模型收口文本 → TurnDone
+        assertThat(scriptedModel.receivedPerCall()).hasSize(2);
+        assertThat(events.stream().filter(AgentEvent.MessageDelta.class::isInstance)).isNotEmpty();
+        List<AgentEvent.TurnDone> dones = events.stream()
             .filter(AgentEvent.TurnDone.class::isInstance)
             .map(AgentEvent.TurnDone.class::cast)
             .toList();
         assertThat(dones).hasSize(1);
-        assertThat(dones.get(0).turnId()).isEqualTo(approval.turnId());
         assertThat(dones.get(0).finishReason()).isEqualTo("STOP");
-        assertThat(turns.findById(approval.turnId()).orElseThrow().status()).isEqualTo("COMPLETED");
+        assertThat(turns.findById(dones.get(0).turnId()).orElseThrow().status()).isEqualTo("COMPLETED");
 
-        // 展示层完整留痕：USER 1 条（resume 不新增用户行）+ 执行轨迹 TOOL_CALL（同 callId
-        // 去重——中断预落与执行期不重复落行）+ TOOL_RESULT + 收口 TEXT
-        List<Message> finalRows = messages.findByTurnIdOrderBySeq(approval.turnId());
-        assertThat(finalRows).extracting(Message::msgType)
+        // AUTO 档 prompt 不含纯聊声明（档位声明只在 CHAT 档追加）
+        assertThat(scriptedModel.receivedPerCall().get(0))
+            .noneSatisfy(text -> assertThat(text).contains("当前为纯对话模式"));
+
+        // 展示层完整留痕：USER + 执行轨迹 TOOL_CALL/TOOL_RESULT（同 callId 各一行）+ 收口 TEXT
+        List<Message> rows = messages.findByTurnIdOrderBySeq(dones.get(0).turnId());
+        assertThat(rows).extracting(Message::msgType)
             .containsExactly("USER", "TOOL_CALL", "TOOL_RESULT", "TEXT");
-        assertThat(finalRows.stream().filter(m -> "USER".equals(m.msgType()))).hasSize(1);
-        List<Message> callRows = finalRows.stream().filter(m -> "TOOL_CALL".equals(m.msgType())).toList();
+        List<Message> callRows = rows.stream().filter(m -> "TOOL_CALL".equals(m.msgType())).toList();
         assertThat(callRows).hasSize(1);
         assertThat(callRows.get(0).callId()).isEqualTo("call-1");
+        assertThat(callRows.get(0).toolName()).isEqualTo("shell");
     }
 
     @Test
-    void endToEndResumeRejectSkipsToolAndFeedsRejectionToModel() {
-        Conversation conv = newConversation("E2E 拒绝路径");
+    void chatModeHasNoToolsAndDeclaresPureChatInPrompt() {
+        Conversation conv = newConversation("E2E CHAT 纯聊", ChatMode.CHAT);
         Path personalRoot = workspaceResolver.personalRoot(CTX.tenantId(), CTX.userId());
+        Path wouldBeDir = personalRoot.resolve("chat_demo");
+        assertThat(wouldBeDir).doesNotExist();
 
-        List<AgentEvent> events = facade.chat(conv.id(), "RUN:mkdir rejected_dir")
-            .collectList().block(Duration.ofSeconds(120));
-        AgentEvent.ApprovalRequest approval = events.stream()
-            .filter(AgentEvent.ApprovalRequest.class::isInstance)
-            .map(AgentEvent.ApprovalRequest.class::cast)
-            .findFirst().orElseThrow();
-        assertThat(personalRoot.resolve("rejected_dir")).doesNotExist();
-
-        // 决议拒绝 + 理由 → resume
-        InterruptionMetadata feedback = InterruptionMetadata.builder(ApprovalHook.HITL_NODE_FULL_NAME, null)
-            .addToolFeedback(ToolFeedback.builder()
-                .id(approval.items().get(0).callId()).name("shell")
-                .arguments(approval.items().get(0).arguments())
-                .result(ToolFeedback.FeedbackResult.REJECTED)
-                .description("测试拒绝理由：不要创建目录")
-                .build())
-            .build();
-        List<AgentEvent> resumeEvents = facade.resume(conv.id(), feedback)
+        // 脚本模型刻意发 toolCall（同一输入在 AUTO 档会真实建目录）——CHAT 档 tools 为空，
+        // SAA 空工具图 model → END 直连：调用无处执行，也不产生任何工具/审批事件
+        List<AgentEvent> events = facade.chat(conv.id(), "RUN:mkdir chat_demo")
             .collectList().block(Duration.ofSeconds(120));
 
-        // 工具未执行（spike 结论 C：路由层短路 + 节点过滤双保险）
-        assertThat(resumeEvents).noneMatch(AgentEvent.ToolResult.class::isInstance);
-        assertThat(personalRoot.resolve("rejected_dir")).doesNotExist();
+        // 模型收到的 system prompt 含纯聊声明（spec §2.3，防口头承诺做事）
+        assertThat(scriptedModel.receivedPerCall().get(0))
+            .anySatisfy(text -> assertThat(text).contains("当前为纯对话模式，无任何工具可用"));
 
-        // 拒绝文案（含理由）以 tool result 抵达第二轮模型输入
-        assertThat(scriptedModel.receivedPerCall().get(scriptedModel.receivedPerCall().size() - 1))
-            .anySatisfy(text -> assertThat(text)
-                .contains("rejected by human")
-                .contains("测试拒绝理由：不要创建目录"));
+        // 无工具可调：调用未执行、无工具/审批事件、目录未出现
+        assertThat(events).noneMatch(AgentEvent.ToolCall.class::isInstance);
+        assertThat(events).noneMatch(AgentEvent.ToolResult.class::isInstance);
+        assertThat(events).noneMatch(AgentEvent.ApprovalRequest.class::isInstance);
+        assertThat(wouldBeDir).doesNotExist();
 
-        // 轮次自然收口：TurnDone + COMPLETED（spec §6：拒绝不终止轮，图自然走完）
-        assertThat(resumeEvents.stream().filter(AgentEvent.TurnDone.class::isInstance)).hasSize(1);
-        assertThat(turns.findById(approval.turnId()).orElseThrow().status()).isEqualTo("COMPLETED");
+        // 空工具图无循环：模型只被调一轮（无工具结果可回传），图直接收口 TurnDone
+        assertThat(scriptedModel.receivedPerCall()).hasSize(1);
+        List<AgentEvent.TurnDone> dones = events.stream()
+            .filter(AgentEvent.TurnDone.class::isInstance)
+            .map(AgentEvent.TurnDone.class::cast)
+            .toList();
+        assertThat(dones).hasSize(1);
+        assertThat(dones.get(0).finishReason()).isEqualTo("STOP");
+        assertThat(turns.findById(dones.get(0).turnId()).orElseThrow().status()).isEqualTo("COMPLETED");
 
-        List<Message> finalRows = messages.findByTurnIdOrderBySeq(approval.turnId());
-        assertThat(finalRows).extracting(Message::msgType)
-            .containsExactly("USER", "TOOL_CALL", "TEXT");
+        // 展示层仅 USER 一行：无处执行的 toolCall 不落执行轨迹、也无正文收口行
+        List<Message> rows = messages.findByTurnIdOrderBySeq(dones.get(0).turnId());
+        assertThat(rows).extracting(Message::msgType).containsExactly("USER");
     }
 
     /**
-     * 脚本模型（SaaInterruptionSpikeTest 同款姿势）：最后一条消息为 "RUN:"-前缀 UserMessage 时
+     * 脚本模型（ApprovalEndToEndTest 同款姿势）：最后一条消息为 "RUN:"-前缀 UserMessage 时
      * 发起 shell 工具调用（命令取前缀后文本），否则收口纯文本——按调用记录全部消息文本
-     * （拒绝路径断言拒绝文案抵达模型）。无跨会话状态，@BeforeEach 仅清录制。
+     * （CHAT 档断言 system prompt 声明送达模型）。无跨会话状态，@BeforeEach 仅清录制。
      */
     static class ScriptedModel implements ChatModel {
 
