@@ -84,7 +84,8 @@ class ConversationControllerTest {
                 .content("{\"title\":\"新会话\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.id").value(1))
-            .andExpect(jsonPath("$.title").value("新会话"));
+            .andExpect(jsonPath("$.title").value("新会话"))
+            .andExpect(jsonPath("$.mode").value("STANDARD"));
     }
 
     /**
@@ -129,7 +130,8 @@ class ConversationControllerTest {
         mockMvc.perform(get("/api/conversations").headers(authHeaders))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].id").value(1))
-            .andExpect(jsonPath("$[0].turnCount").value(3));
+            .andExpect(jsonPath("$[0].turnCount").value(3))
+            .andExpect(jsonPath("$[0].mode").value("STANDARD"));
     }
 
     @Test
@@ -180,5 +182,92 @@ class ConversationControllerTest {
 
         org.mockito.Mockito.verify(checkpointCleaner, org.mockito.Mockito.never())
             .deleteByConversationId(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    // ── PUT /mode（modes Task 3）：三档切换 + 严格校验 + 归属/pending 防线 ──
+
+    /** 已落库会话实体（固定旧时间戳，用于断言 updatedAt 刷新与 createdAt 原样转发） */
+    private static com.linagent.agent.persistence.po.Conversation conv(Long id, String mode) {
+        java.time.Instant past = java.time.Instant.parse("2026-09-01T00:00:00Z");
+        return new com.linagent.agent.persistence.po.Conversation(id, "会话A", "conv-" + id, null, 0,
+            "default", "linmj", mode, past, past);
+    }
+
+    /** 三档合法值（含大小写/空白归一）落库且响应 {id, mode}；其余字段原样转发、updatedAt 刷新 */
+    @Test
+    void updateModeAcceptsAllThreeModesAndPersists() throws Exception {
+        when(conversations.findById(1L)).thenReturn(Optional.of(conv(1L, "STANDARD")));
+
+        for (String raw : new String[] {"AUTO", " chat ", "standard"}) {
+            mockMvc.perform(put("/api/conversations/1/mode").headers(authHeaders)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"mode\":\"%s\"}".formatted(raw)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(1))
+                .andExpect(jsonPath("$.mode").value(raw.trim().toUpperCase()));
+        }
+
+        org.mockito.ArgumentCaptor<com.linagent.agent.persistence.po.Conversation> captor =
+            org.mockito.ArgumentCaptor.forClass(com.linagent.agent.persistence.po.Conversation.class);
+        verify(conversations, times(3)).save(captor.capture());
+        assertThat(captor.getAllValues())
+            .extracting(com.linagent.agent.persistence.po.Conversation::mode)
+            .containsExactly("AUTO", "CHAT", "STANDARD");
+        // 非目标字段原样转发（title/threadId/归属/createdAt），仅 mode 与 updatedAt 变化
+        com.linagent.agent.persistence.po.Conversation saved = captor.getAllValues().get(0);
+        assertThat(saved.title()).isEqualTo("会话A");
+        assertThat(saved.threadId()).isEqualTo("conv-1");
+        assertThat(saved.tenantId()).isEqualTo("default");
+        assertThat(saved.userId()).isEqualTo("linmj");
+        assertThat(saved.createdAt()).isEqualTo(java.time.Instant.parse("2026-09-01T00:00:00Z"));
+        assertThat(saved.updatedAt()).isAfter(java.time.Instant.parse("2026-09-01T00:00:00Z"));
+    }
+
+    /** 严格校验：本端点不静默回落 STANDARD——非法/空白/缺失值一律 400（message 供前端提示），不落库 */
+    @Test
+    void updateModeRejectsInvalidValueWith400() throws Exception {
+        for (String body : new String[] {"{\"mode\":\"TURBO\"}", "{\"mode\":\"\"}", "{}"}) {
+            mockMvc.perform(put("/api/conversations/1/mode").headers(authHeaders)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").exists());
+        }
+        // 完全空 body（@RequestBody required=false → null）同样 400
+        mockMvc.perform(put("/api/conversations/1/mode").headers(authHeaders))
+            .andExpect(status().isBadRequest());
+
+        verify(conversations, org.mockito.Mockito.never()).save(any());
+    }
+
+    /** 归属 404 统一语义（不泄漏存在性），且不触 pending 检查与落库 */
+    @Test
+    void updateModeUnknownConversationReturns404() throws Exception {
+        org.mockito.Mockito.doThrow(
+                new com.linagent.agent.persistence.repository.ConversationAccessDeniedException(404L))
+            .when(conversations).requireOwned(eq(404L), any(), any());
+
+        mockMvc.perform(put("/api/conversations/404/mode").headers(authHeaders)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mode\":\"AUTO\"}"))
+            .andExpect(status().isNotFound());
+
+        verify(turns, org.mockito.Mockito.never())
+            .existsByConversationIdAndStatus(org.mockito.ArgumentMatchers.anyLong(), any());
+        verify(conversations, org.mockito.Mockito.never()).save(any());
+    }
+
+    /** 待审批轮挡回切档（409 携 conversationId，前端复用审批卡片链路），不落库 */
+    @Test
+    void updateModeBlockedByPendingApprovalReturns409() throws Exception {
+        when(turns.existsByConversationIdAndStatus(1L, "WAITING_APPROVAL")).thenReturn(true);
+
+        mockMvc.perform(put("/api/conversations/1/mode").headers(authHeaders)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mode\":\"AUTO\"}"))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.conversationId").value(1));
+
+        verify(conversations, org.mockito.Mockito.never()).save(any());
     }
 }

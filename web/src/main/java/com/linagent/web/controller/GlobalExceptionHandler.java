@@ -39,4 +39,15 @@ public class GlobalExceptionHandler {
         }
         return body;
     }
+
+    /**
+     * PUT /mode 严格枚举校验（modes Task 3）：非法值 400——与 ChatMode.parse 的容错回落
+     * （DB 脏值/缺省）互补：切档是显式意图，打错字静默变档比 400 更危险。
+     * body 形状与 404/409 统一（{message}，前端 ApiError.from 直取）。
+     */
+    @ExceptionHandler(InvalidChatModeException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, String> invalidChatMode(InvalidChatModeException e) {
+        return Map.of("message", e.getMessage());
+    }
 }
