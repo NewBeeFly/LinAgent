@@ -70,7 +70,8 @@ class AgentFactoryTest {
         // CHAT：prompt = 缓存串 + 追加声明（防模型口头承诺做事——协议层无 tools）
         assertThat(chat.systemPrompt())
             .startsWith(standard.systemPrompt())
-            .contains("当前为纯对话模式，无任何工具可用，请直接回答，不要声称会执行操作。");
+            .contains("系统未向你提供任何工具")
+            .contains("不要输出工具调用格式");
         // AUTO/STANDARD：system prompt 保持缓存串原样
         assertThat(auto.systemPrompt()).isEqualTo(standard.systemPrompt());
     }

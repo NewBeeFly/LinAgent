@@ -339,18 +339,8 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
       <div class="approval-banner" v-if="approvalPending" @click="approvalPending = false">
         有待审批操作，请先处理（点击关闭）
       </div>
-      <!-- 会话模式切换器：标题旁三段（自由红警/标准/纯聊），切档 409 走全局横幅 -->
       <div class="chat-header" v-if="activeConversation">
         <span class="chat-title">{{ activeConversation.title }}</span>
-        <div class="mode-switch" role="group" aria-label="切换会话模式">
-          <button v-for="m in CHAT_MODES" :key="m" class="mode-btn"
-                  :class="{ active: m === activeMode, danger: modeMeta(m).danger }"
-                  :aria-pressed="m === activeMode" :disabled="switchingMode"
-                  :title="modeMeta(m).danger ? '自由档：工具调用免审批，风险自担' : undefined"
-                  @click="switchMode(m)">
-            {{ modeMeta(m).icon }} {{ modeMeta(m).label }}
-          </button>
-        </div>
       </div>
       <div class="timeline" ref="timelineEl">
         <!-- 空会话欢迎面板 -->
@@ -384,6 +374,19 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
             <p class="error-line" v-if="turn.errorText">{{ turn.errorText }}</p>
           </div>
         </article>
+      </div>
+
+      <!-- 会话模式切换器：输入框上方三段（自由红警/标准/纯聊），切档 409 走全局横幅 -->
+      <div class="mode-bar" v-if="activeConversation">
+        <div class="mode-switch" role="group" aria-label="切换会话模式">
+          <button v-for="m in CHAT_MODES" :key="m" class="mode-btn"
+                  :class="{ active: m === activeMode, danger: modeMeta(m).danger }"
+                  :aria-pressed="m === activeMode" :disabled="switchingMode"
+                  :title="modeMeta(m).danger ? '自由档：工具调用免审批，风险自担' : undefined"
+                  @click="switchMode(m)">
+            {{ modeMeta(m).icon }} {{ modeMeta(m).label }}
+          </button>
+        </div>
       </div>
 
       <div class="composer">
@@ -563,15 +566,20 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
 }
 
 /* ============ 会话模式切换器 ============ */
-/* 标题+切换器左簇布局：右端留空避让 fixed 身份切换器（窄桌面也不重叠） */
+/* 切换器贴输入框（mode-bar 与 composer 同宽），header 只留标题 */
 .chat-header {
   display: flex;
   align-items: center;
-  gap: 12px;
   width: 100%;
   max-width: calc(var(--content-width) + 48px);
   margin: 0 auto;
   padding: 12px 24px 2px;
+}
+.mode-bar {
+  width: 100%;
+  max-width: calc(var(--content-width) + 48px);
+  margin: 0 auto;
+  padding: 0 24px 4px;
 }
 .chat-title {
   flex: 0 1 auto;
@@ -745,6 +753,7 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
   .sidebar.open { transform: none; }
   /* 顶部让位给 fixed ☰ 与身份切换器：标题隐藏，header 承接原 timeline 的顶部间距 */
   .chat-header { padding: 58px 16px 2px; }
+  .mode-bar { padding: 0 16px 4px; }
   .chat-title { display: none; }
   .timeline { padding: 8px 16px 8px; }
   .composer { padding: 10px 16px 16px; }
