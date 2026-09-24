@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.skills.registry.filesystem.FileSystemSkillRegistry;
 import com.linagent.agent.compaction.SummarizingModelHook;
 import com.linagent.agent.context.AuthContext;
+import com.linagent.agent.conversation.ChatMode;
 import com.linagent.agent.skills.FilteredSkillRegistry;
 import com.linagent.agent.skills.ResidentPromptBuilder;
 import com.linagent.agent.skills.SkillManifestScanner;
@@ -46,6 +47,32 @@ class AgentFactoryTest {
         assertThat(handle.tappedModel()).isNotNull();
         // ReactAgent 不暴露 systemPrompt 读取口，装配产物随 handle 携带后断言常驻正文
         assertThat(handle.systemPrompt()).contains("常驻技能正文");
+        // 旧签名（无 mode 参）委托 STANDARD 档（测试兼容契约）
+        assertThat(handle.mode()).isEqualTo(ChatMode.STANDARD);
+    }
+
+    /** v0.3 三档构造分支：handle 携带档位 + CHAT 追加纯聊声明（spec §2.3 原文），
+     *  AUTO/STANDARD 的 system prompt 与缓存串一致（不追加）；三档 create 均不抛 */
+    @Test
+    void threeModeCreateBranchesAssemblyByChatMode() throws Exception {
+        AgentFactory factory = newFactory();
+        Sinks.Many<Object> sink = Sinks.many().unicast().onBackpressureBuffer();
+
+        AgentFactory.AgentHandle standard = factory.create(CTX, 1L, sink, new AtomicReference<>(), ChatMode.STANDARD);
+        AgentFactory.AgentHandle auto = factory.create(CTX, 2L, sink, new AtomicReference<>(), ChatMode.AUTO);
+        AgentFactory.AgentHandle chat = factory.create(CTX, 3L, sink, new AtomicReference<>(), ChatMode.CHAT);
+
+        // AgentHandle.mode：三档断言面（E2E/后续任务复用）
+        assertThat(standard.mode()).isEqualTo(ChatMode.STANDARD);
+        assertThat(auto.mode()).isEqualTo(ChatMode.AUTO);
+        assertThat(chat.mode()).isEqualTo(ChatMode.CHAT);
+
+        // CHAT：prompt = 缓存串 + 追加声明（防模型口头承诺做事——协议层无 tools）
+        assertThat(chat.systemPrompt())
+            .startsWith(standard.systemPrompt())
+            .contains("当前为纯对话模式，无任何工具可用，请直接回答，不要声称会执行操作。");
+        // AUTO/STANDARD：system prompt 保持缓存串原样
+        assertThat(auto.systemPrompt()).isEqualTo(standard.systemPrompt());
     }
 
     /** Task 6：工具实例每轮构造烤入个人根——两轮 create 各自身份的个人工作区被 provision 出来 */

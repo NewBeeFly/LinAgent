@@ -16,6 +16,7 @@ import com.linagent.agent.approval.InMemorySessionRules;
 import com.linagent.agent.approval.PermissionRuleEngine;
 import com.linagent.agent.compaction.SummarizingModelHook;
 import com.linagent.agent.context.AuthContext;
+import com.linagent.agent.conversation.ChatMode;
 import com.linagent.agent.persistence.po.PermissionRule;
 import com.linagent.agent.persistence.repository.PermissionRuleRepository;
 import com.linagent.agent.skills.FilteredSkillRegistry;
@@ -44,6 +45,11 @@ import java.util.function.Consumer;
  * 审批 HITL（Task 5）同样随轮装配：PermissionRuleEngine + ApprovalHook 按该轮
  * (tenant, user, conversation) 构造（Task 4 recipe），engine/hook 非 Bean 跨轮零共享；
  * userRules 每轮查库（「批准并记住」的新规则下轮即生效）。
+ *
+ * <p>v0.3 会话档位（spec §1）：按 {@link ChatMode} 分支装配——STANDARD 现状全挂（含审批）；
+ * AUTO 免审批（ApprovalHook 与中断节点注册整体缺席，tools/技能/压缩照常）；CHAT 完全无工具
+ * （tools 空列表 + 仅压缩钩子 + prompt 追加 {@link #CHAT_SUFFIX} 声明）。档位由 facade 读
+ * conversation.mode 传入，进行中轮次不受切换影响（每轮重新构造）。
  */
 @Component
 public class AgentFactory {
@@ -74,34 +80,73 @@ public class AgentFactory {
         this.sessionRules = sessionRules;
     }
 
-    /** ReactAgent 不暴露 systemPrompt 读取口（仅 instruction()），装配产物随 handle 携带 */
-    public record AgentHandle(ReactAgent agent, ThinkingTapChatModel tappedModel, String systemPrompt,
-                              Consumer<RunnableConfig> resumePrimer) {
+    /** CHAT（纯聊档）system prompt 追加声明（spec §2.3 原文）：静态缓存串含工具说明而协议层
+     * 无 tools 定义，模型可能口头应承做事——显式声明堵住承诺性幻觉 */
+    static final String CHAT_SUFFIX =
+        "当前为纯对话模式，无任何工具可用，请直接回答，不要声称会执行操作。";
 
-        /** chat 路径无需预备（BEFORE_AGENT 钩子承担初始化），无操作 primer */
+    /** ReactAgent 不暴露 systemPrompt 读取口（仅 instruction()），装配产物随 handle 携带；
+     *  mode 为构造档位（v0.3 三档断言面，测试/E2E 用） */
+    public record AgentHandle(ReactAgent agent, ThinkingTapChatModel tappedModel, String systemPrompt,
+                              Consumer<RunnableConfig> resumePrimer, ChatMode mode) {
+
+        /** chat 路径无需预备（BEFORE_AGENT 钩子承担初始化），无操作 primer；档位默认 STANDARD */
         public AgentHandle(ReactAgent agent, ThinkingTapChatModel tappedModel, String systemPrompt) {
-            this(agent, tappedModel, systemPrompt, config -> { });
+            this(agent, tappedModel, systemPrompt, config -> { }, ChatMode.STANDARD);
         }
     }
 
     public AgentHandle create(AuthContext ctx, Long conversationId, Sinks.Many<Object> thinkingSink,
                               AtomicReference<Object> usageCapture) {
-        return create(ctx, conversationId, thinkingSink, usageCapture, List.of());
+        return create(ctx, conversationId, thinkingSink, usageCapture, List.of(), ChatMode.STANDARD);
     }
 
     /** 工具拦截器注入（EventEmittingToolInterceptor：工具事件旁路 + 展示存储落库） */
     public AgentHandle create(AuthContext ctx, Long conversationId, Sinks.Many<Object> thinkingSink,
                               AtomicReference<Object> usageCapture, ToolInterceptor toolInterceptor) {
-        return create(ctx, conversationId, thinkingSink, usageCapture, List.of(toolInterceptor));
+        return create(ctx, conversationId, thinkingSink, usageCapture, List.of(toolInterceptor), ChatMode.STANDARD);
+    }
+
+    /** v0.3 会话档位入口（spec §2.4 生效链）：facade 读 conv.mode 传入，按档分支装配 */
+    public AgentHandle create(AuthContext ctx, Long conversationId, Sinks.Many<Object> thinkingSink,
+                              AtomicReference<Object> usageCapture, ToolInterceptor toolInterceptor,
+                              ChatMode mode) {
+        return create(ctx, conversationId, thinkingSink, usageCapture, List.of(toolInterceptor), mode);
+    }
+
+    /** 同上，无工具拦截器场景（等价空拦截器列表；测试/无事件旁路调用便利） */
+    public AgentHandle create(AuthContext ctx, Long conversationId, Sinks.Many<Object> thinkingSink,
+                              AtomicReference<Object> usageCapture, ChatMode mode) {
+        return create(ctx, conversationId, thinkingSink, usageCapture, List.of(), mode);
     }
 
     private AgentHandle create(AuthContext ctx, Long conversationId, Sinks.Many<Object> thinkingSink,
                                AtomicReference<Object> usageCapture,
-                               List<Interceptor> interceptors) {
+                               List<Interceptor> interceptors, ChatMode mode) {
         Path personalRoot = workspaceResolver.personalRoot(ctx.tenantId(), ctx.userId());
-        FileTools fileTools = new FileTools(personalRoot);
 
         ThinkingTapChatModel tapped = new ThinkingTapChatModel(chatModel, thinkingSink, thinkingExtractor, usageCapture);
+
+        String basePrompt = residentPromptBuilder.build();
+
+        // CHAT（纯聊档，spec §2.3）：完全无工具——tools 空列表（SAA hasTools 标志位设计内支持
+        // 空列表路由，无工具节点）、不挂 skills/shell/approval 钩子（仅压缩）；
+        // 无 shell 钩子即无会话初始化需求，resumePrimer 走无操作缺省
+        if (mode == ChatMode.CHAT) {
+            String chatPrompt = basePrompt + "\n\n" + CHAT_SUFFIX;
+            ReactAgent agent = ReactAgent.builder()
+                .name("lin-agent")
+                .model(tapped)
+                .systemPrompt(chatPrompt)
+                .tools(List.of())
+                .hooks(List.of(summarizingHook))
+                .saver(checkpointSaver)
+                .interceptors(interceptors)
+                .build();
+            return new AgentHandle(agent, tapped, chatPrompt, config -> { }, mode);
+        }
+
+        FileTools fileTools = new FileTools(personalRoot);
 
         SkillsAgentHook skillsHook = SkillsAgentHook.builder()
             .skillRegistry(skillRegistry)
@@ -115,20 +160,40 @@ public class AgentFactory {
             .shellTool2(shellTool)
             .build();
 
-        // 审批 HITL 随轮装配（Task 4 recipe）：userRules 按归属查 ALLOW 规则，
-        // session 规则进程内共享（同 InMemorySessionRules Bean），判定上下文绑定本轮会话
+        // resume 预备（Task 6 E2E 实证）：从 checkpoint 恢复的续跑不经过 BEFORE_AGENT 节点
+        // ——ShellToolAgentHook 的会话初始化（session 存 config.context()）不会执行，
+        // 续跑首个 shell 调用将报 "Shell session not initialized"。resume 前补一次
+        // initialize（幂等起点：该 config 为全新对象，与 chat 轮互不串扰）
+        Consumer<RunnableConfig> resumePrimer = config -> shellTool.getSessionManager().initialize(config);
+
+        // AUTO（自由档，spec §1）：免审批——ApprovalHook 不挂、审批中断节点不注册
+        // （工具直执行零中断），tools/技能/压缩照常
+        if (mode == ChatMode.AUTO) {
+            ReactAgent agent = ReactAgent.builder()
+                .name("lin-agent")
+                .model(tapped)
+                .systemPrompt(basePrompt)
+                .tools(fileTools.toCallbacks())
+                .hooks(List.of(skillsHook, shellHook, summarizingHook))
+                .saver(checkpointSaver)
+                .interceptors(interceptors)
+                .build();
+            return new AgentHandle(agent, tapped, basePrompt, resumePrimer, mode);
+        }
+
+        // STANDARD（默认档，现状全挂）：审批 HITL 随轮装配（Task 4 recipe）：userRules 按
+        // 归属查 ALLOW 规则，session 规则进程内共享（同 InMemorySessionRules Bean），
+        // 判定上下文绑定本轮会话
         List<PermissionRule> userRules = permissionRules.findByTenantIdAndUserIdAndEffect(
             ctx.tenantId(), ctx.userId(), "ALLOW");
         ApprovalHook approvalHook = new ApprovalHook(
             new PermissionRuleEngine(userRules, sessionRules),
             new PermissionRuleEngine.ApprovalContext(ctx.tenantId(), ctx.userId(), conversationId));
 
-        String systemPrompt = residentPromptBuilder.build();
-
         ReactAgent agent = ReactAgent.builder()
             .name("lin-agent")
             .model(tapped)
-            .systemPrompt(systemPrompt)
+            .systemPrompt(basePrompt)
             .tools(fileTools.toCallbacks())
             .hooks(List.of(skillsHook, shellHook, summarizingHook, approvalHook))
             .saver(checkpointSaver)
@@ -137,13 +202,7 @@ public class AgentFactory {
 
         registerInterruptibleApprovalNode(agent, approvalHook);
 
-        // resume 预备（Task 6 E2E 实证）：从 checkpoint 恢复的续跑不经过 BEFORE_AGENT 节点
-        // ——ShellToolAgentHook 的会话初始化（session 存 config.context()）不会执行，
-        // 续跑首个 shell 调用将报 "Shell session not initialized"。resume 前补一次
-        // initialize（幂等起点：该 config 为全新对象，与 chat 轮互不串扰）
-        Consumer<RunnableConfig> resumePrimer = config -> shellTool.getSessionManager().initialize(config);
-
-        return new AgentHandle(agent, tapped, systemPrompt, resumePrimer);
+        return new AgentHandle(agent, tapped, basePrompt, resumePrimer, mode);
     }
 
     /**

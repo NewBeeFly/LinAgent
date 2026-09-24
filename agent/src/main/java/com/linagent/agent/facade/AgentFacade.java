@@ -11,6 +11,7 @@ import com.linagent.agent.approval.ApprovalHook;
 import com.linagent.agent.approval.PermissionRuleEngine;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
+import com.linagent.agent.conversation.ChatMode;
 import com.linagent.agent.persistence.po.Conversation;
 import com.linagent.agent.persistence.repository.ConversationRepository;
 import com.linagent.agent.persistence.po.Message;
@@ -191,8 +192,11 @@ public class AgentFacade {
 
         EventEmittingToolInterceptor toolInterceptor =
             new EventEmittingToolInterceptor(sideEvents, buffer, turn.id());
+        // v0.3 会话档位（spec §2.4 生效链）：conv.mode 经 parse 容错解析传入 factory，
+        // 空值/未知值回落 STANDARD；进行中轮次不受切换影响（每轮重新构造）
         AgentFactory.AgentHandle handle =
-            agentFactory.create(ctx, conversationId, sideEvents, usageCapture, toolInterceptor);
+            agentFactory.create(ctx, conversationId, sideEvents, usageCapture, toolInterceptor,
+                ChatMode.parse(conv.mode()));
 
         // agent.stream 声明受检 GraphRunnerException，在 defer 内转 Flux.error 走统一错误路径
         Flux<NodeOutput> nodeOutputs;

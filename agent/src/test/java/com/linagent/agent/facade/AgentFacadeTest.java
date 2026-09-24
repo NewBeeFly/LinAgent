@@ -10,6 +10,7 @@ import com.linagent.agent.approval.ApprovalHook;
 import com.linagent.agent.approval.PermissionRuleEngine;
 import com.linagent.agent.context.AuthContext;
 import com.linagent.agent.context.AuthContextHolder;
+import com.linagent.agent.conversation.ChatMode;
 import com.linagent.agent.persistence.po.Conversation;
 import com.linagent.agent.persistence.repository.ConversationRepository;
 import com.linagent.agent.persistence.po.Message;
@@ -55,6 +56,8 @@ class AgentFacadeTest {
     private Sinks.Many<Object> capturedSink;
     private ReactAgent capturedAgent;
     private AtomicReference<Object> capturedUsageRef;
+    /** facade 传给 factory 的会话档位（conv.mode 经 ChatMode.parse 后的值） */
+    private ChatMode capturedMode;
 
     @BeforeEach
     void setUp() {
@@ -63,14 +66,16 @@ class AgentFacadeTest {
         messages = new InMemoryMessageRepository();
         stubSideEvents.clear();
         stubMainFlux = null;
+        capturedMode = null;
         // 默认喂一份真实捕获形态的 usage（终审 Important 2：收尾落 turn.usage）
         stubUsage = usage(10, 20, 30);
 
         factory = mock(AgentFactory.class);
-        when(factory.create(any(), any(), any(), any(), any())).thenAnswer(inv -> {
-            // create(ctx, conversationId, thinkingSink, usageCapture, toolInterceptor)
+        when(factory.create(any(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
+            // create(ctx, conversationId, thinkingSink, usageCapture, toolInterceptor, mode)
             capturedSink = inv.getArgument(2);
             capturedUsageRef = inv.getArgument(3);
+            capturedMode = inv.getArgument(5);
             ReactAgent agent = mock(ReactAgent.class);
             when(agent.stream(any(UserMessage.class), any(RunnableConfig.class)))
                 .thenAnswer(streamInv -> stubAgentMainFlux());
@@ -79,7 +84,7 @@ class AgentFacadeTest {
                 any(RunnableConfig.class)))
                 .thenAnswer(streamInv -> stubAgentMainFlux());
             capturedAgent = agent;
-            return new AgentFactory.AgentHandle(agent, null, "stub-system-prompt", config -> { });
+            return new AgentFactory.AgentHandle(agent, null, "stub-system-prompt", config -> { }, capturedMode);
         });
 
         facade = new AgentFacade(factory, conversations, turns, messages, "step-3.7-flash");
@@ -174,6 +179,30 @@ class AgentFacadeTest {
         facade.chat(conv.id(), "问题").blockLast();
 
         assertThat(messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id()).get(0).seq()).isEqualTo(0);
+    }
+
+    // ---- v0.3 会话模式：facade → factory 传参 ----
+
+    /** chat 把 conv.mode（经 ChatMode.parse）传给 AgentFactory 六参 create */
+    @Test
+    void chatPassesConversationModeToFactory() {
+        Conversation conv = conversations.save(
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", "CHAT", Instant.now(), Instant.now()));
+
+        facade.chat(conv.id(), "你好").blockLast();
+
+        assertThat(capturedMode).isEqualTo(ChatMode.CHAT);
+    }
+
+    /** mode 列空值（V8 迁移前的存量语义/异常数据）：parse 回落 STANDARD 传入 */
+    @Test
+    void chatFallsBackToStandardWhenModeColumnBlank() {
+        Conversation conv = conversations.save(
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", null, Instant.now(), Instant.now()));
+
+        facade.chat(conv.id(), "你好").blockLast();
+
+        assertThat(capturedMode).isEqualTo(ChatMode.STANDARD);
     }
 
     @Test
