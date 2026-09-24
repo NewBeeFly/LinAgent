@@ -14,6 +14,8 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class FilteredSkillRegistryTest {
 
@@ -76,6 +78,26 @@ class FilteredSkillRegistryTest {
         assertThat(filtered.get("progressive-skill")).isPresent();
         assertThatThrownBy(() -> filtered.readSkillContent("resident-skill"))
             .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void listAllSortedByNameForStablePromptPrefix() {
+        // delegate 返回顺序不受控（FileSystemSkillRegistry 底层 HashMap 迭代序无保证），
+        // listAll 必须按 name 字典序输出：buildSkillsPrompt 消费 listAll，顺序抖动 =
+        // 拼出的技能清单逐字节变化 = LLM 前缀缓存全量失效
+        SkillRegistry unordered = mock(SkillRegistry.class);
+        when(unordered.listAll()).thenReturn(List.of(
+            meta("zeta-skill"), meta("alpha-skill"), meta("resident-skill"), meta("mid-skill")));
+        FilteredSkillRegistry r = new FilteredSkillRegistry(unordered, Set.of("resident-skill"));
+        assertThat(r.listAll())
+            .extracting(SkillMetadata::getName)
+            .containsExactly("alpha-skill", "mid-skill", "zeta-skill");
+    }
+
+    private static SkillMetadata meta(String name) {
+        SkillMetadata m = new SkillMetadata();
+        m.setName(name);
+        return m;
     }
 
     @Test

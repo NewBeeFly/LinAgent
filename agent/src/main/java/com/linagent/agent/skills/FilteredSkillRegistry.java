@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
 import org.springframework.ai.chat.prompt.SystemPromptTemplate;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -29,6 +30,9 @@ public class FilteredSkillRegistry implements SkillRegistry {
     public List<SkillMetadata> listAll() {
         return delegate.listAll().stream()
             .filter(m -> !residentNames.contains(m.getName()))
+            // 按 name 排序：SkillsInterceptor 每次模型调用消费 listAll 拼技能清单，
+            // delegate（HashMap）迭代序无保证，顺序抖动会让清单逐字节变化、LLM 前缀缓存全量失效
+            .sorted(Comparator.comparing(SkillMetadata::getName))
             .toList();
     }
 
