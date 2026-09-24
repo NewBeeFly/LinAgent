@@ -1,19 +1,18 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, reactive, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, reactive, watch, computed } from 'vue'
 import { streamSse } from './api/sse'
-import { createConversation, fetchIdentityOptions, getPendingApproval, getTurns, listConversations } from './api/rest'
-import type { TenantIdentityOptions } from './api/rest'
+import { createConversation, fetchIdentityOptions, getPendingApproval, getTurns, listConversations, putConversationMode } from './api/rest'
+import type { ConversationSummary, TenantIdentityOptions } from './api/rest'
 import { ApiError } from './api/error'
 import { currentIdentity, setIdentity } from './api/identity'
 import { applySseEvent, executedWithoutText, failTurn, newTurn, thinkingActive, turnFromRecord } from './turn'
+import { CHAT_MODES, isChatOnly, modeMeta } from './modes'
 import type { ApprovalDecisionPayload, ChatTurn, TurnRecord } from './types'
 import ThinkingBlock from './components/ThinkingBlock.vue'
 import ToolCard from './components/ToolCard.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ApprovalCard from './components/ApprovalCard.vue'
 import PermissionSettings from './views/PermissionSettings.vue'
-
-interface ConversationItem { id: number; title: string; turnCount: number; updatedAt: string }
 
 // 轻量哈希路由（无 vue-router 依赖，单设置页不值得引入）：#/settings/permissions ↔ 权限设置
 const SETTINGS_HASH = '#/settings/permissions'
@@ -25,7 +24,7 @@ const openSettings = () => {
   window.location.hash = SETTINGS_HASH
 }
 
-const conversations = ref<ConversationItem[]>([])
+const conversations = ref<ConversationSummary[]>([])
 const activeId = ref<number | null>(null)
 const input = ref('')
 const sending = ref(false)
@@ -40,6 +39,18 @@ const approvalPending = ref(false)
 
 /** 会话不可用的统一文案（turn 收尾与全局横幅共用，改文案只动这里） */
 const CONV_UNAVAILABLE = '该会话已不可用（可能已删除或归属其他用户）'
+
+/** 会话不存在的统一文案（select / 切档的 404 分支共用） */
+const CONV_NOT_FOUND = '该会话不存在或无权访问，已自动移除'
+
+/** 切档被待审批轮挡回（PUT /mode 409；body 与审批 409 同形，按挂掉的接口区分语义） */
+const MODE_SWITCH_BLOCKED = '存在待审批操作，请先完成审批再切换模式'
+
+/** 纯聊档输入框占位（该档无工具，明确预期避免用户要求文件/shell 操作） */
+const PLACEHOLDER_CHAT_ONLY = '纯对话模式（无工具）'
+
+/** 默认输入框占位 */
+const PLACEHOLDER_DEFAULT = '输入消息，Enter 发送'
 
 // 身份切换器：候选来自 /api/identity/options（免鉴权）；拉取失败隐藏切换器不影响使用
 const identityOptions = ref<TenantIdentityOptions[]>([])
@@ -115,11 +126,50 @@ const select = async (id: number) => {
     if (history.some((t) => t.status === 'WAITING_APPROVAL')) await restorePending(id)
   } catch (err) {
     if (err instanceof ApiError && err.notFound) {
-      globalError.value = '该会话不存在或无权访问，已自动移除'
+      globalError.value = CONV_NOT_FOUND
       dropConversation(id)
     } else if (!authFailed(err)) {
       throw err
     }
+  }
+}
+
+/* ============ 会话模式切换器（modes Task 4） ============ */
+
+const activeConversation = computed(() => conversations.value.find((c) => c.id === activeId.value))
+
+/** 当前会话模式：无会话/未知值按 STANDARD 兜底渲染（与后端 ChatMode.parse 容错一致） */
+const activeMode = computed(() => activeConversation.value?.mode ?? 'STANDARD')
+
+/** 纯聊档占位提示 */
+const inputPlaceholder = computed(() => (isChatOnly(activeMode.value) ? PLACEHOLDER_CHAT_ONLY : PLACEHOLDER_DEFAULT))
+
+const switchingMode = ref(false)
+
+/**
+ * 切档：PUT /mode 成功 → 仅本地更新对应会话项的 mode（高亮与占位即时变化，不整表刷新）；
+ * 409 = 存在待审批轮（先决议再切档，不落档）；404 = 会话不可用（摘除回欢迎态）；
+ * 401 走全局横幅，其余错误进全局横幅但不打断聊天。
+ */
+const switchMode = async (mode: string) => {
+  if (!activeId.value || switchingMode.value || mode === activeMode.value) return
+  const convId = activeId.value
+  switchingMode.value = true
+  try {
+    const { id, mode: applied } = await putConversationMode(convId, mode)
+    const target = conversations.value.find((c) => c.id === id)
+    if (target) target.mode = applied
+  } catch (err) {
+    if (err instanceof ApiError && err.conflict) {
+      globalError.value = MODE_SWITCH_BLOCKED
+    } else if (err instanceof ApiError && err.notFound) {
+      globalError.value = CONV_NOT_FOUND
+      dropConversation(convId)
+    } else if (!authFailed(err)) {
+      globalError.value = err instanceof Error ? err.message : String(err)
+    }
+  } finally {
+    switchingMode.value = false
   }
 }
 
@@ -289,6 +339,19 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
       <div class="approval-banner" v-if="approvalPending" @click="approvalPending = false">
         有待审批操作，请先处理（点击关闭）
       </div>
+      <!-- 会话模式切换器：标题旁三段（自由红警/标准/纯聊），切档 409 走全局横幅 -->
+      <div class="chat-header" v-if="activeConversation">
+        <span class="chat-title">{{ activeConversation.title }}</span>
+        <div class="mode-switch" role="group" aria-label="切换会话模式">
+          <button v-for="m in CHAT_MODES" :key="m" class="mode-btn"
+                  :class="{ active: m === activeMode, danger: modeMeta(m).danger }"
+                  :aria-pressed="m === activeMode" :disabled="switchingMode"
+                  :title="modeMeta(m).danger ? '自由档：工具调用免审批，风险自担' : undefined"
+                  @click="switchMode(m)">
+            {{ modeMeta(m).icon }} {{ modeMeta(m).label }}
+          </button>
+        </div>
+      </div>
       <div class="timeline" ref="timelineEl">
         <!-- 空会话欢迎面板 -->
         <div v-if="turns.length === 0" class="welcome">
@@ -325,7 +388,7 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
 
       <div class="composer">
         <textarea v-model="input" @keydown.enter.exact.prevent="send"
-                  placeholder="输入消息，Enter 发送" :disabled="sending" rows="2" />
+                  :placeholder="inputPlaceholder" :disabled="sending" rows="2" />
         <button class="send" @click="send" :disabled="sending || !activeId">发送</button>
       </div>
     </main>
@@ -499,6 +562,61 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
   cursor: pointer;
 }
 
+/* ============ 会话模式切换器 ============ */
+/* 标题+切换器左簇布局：右端留空避让 fixed 身份切换器（窄桌面也不重叠） */
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: calc(var(--content-width) + 48px);
+  margin: 0 auto;
+  padding: 12px 24px 2px;
+}
+.chat-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mode-switch {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+.mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mode-btn:hover { color: var(--ink); }
+.mode-btn.active {
+  background: var(--pine-soft);
+  color: var(--pine-deep);
+  font-weight: 600;
+}
+.mode-btn:disabled { opacity: 0.55; cursor: default; }
+/* 自由档红警：免审批高危，idle 红字 / active 红底，与另两档形成风险对比 */
+.mode-btn.danger { color: var(--danger); }
+.mode-btn.danger.active {
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+}
+
 /* ============ 欢迎面板 ============ */
 .welcome { padding: 10vh 8px 0; }
 .wordmark {
@@ -625,7 +743,10 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
     background: var(--paper);
   }
   .sidebar.open { transform: none; }
-  .timeline { padding: 64px 16px 8px; }
+  /* 顶部让位给 fixed ☰ 与身份切换器：标题隐藏，header 承接原 timeline 的顶部间距 */
+  .chat-header { padding: 58px 16px 2px; }
+  .chat-title { display: none; }
+  .timeline { padding: 8px 16px 8px; }
   .composer { padding: 10px 16px 16px; }
   .wordmark { font-size: 40px; }
   .rail { padding-left: 20px; }
