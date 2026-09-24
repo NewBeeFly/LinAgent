@@ -62,4 +62,15 @@ class FlywayMigrationTest {
             """, String.class);
         assertThat(column).isEqualTo("integer:NO:0");
     }
+
+    @Test
+    void chatModeColumnAddedByV8() {
+        // V8__chat_mode.sql：会话模式 AUTO|STANDARD|CHAT，存量与新建会话默认 STANDARD
+        String column = jdbcTemplate.queryForObject("""
+            select data_type || ':' || is_nullable || ':' || column_default
+            from information_schema.columns
+            where table_name = 'conversation' and column_name = 'mode'
+            """, String.class);
+        assertThat(column).isEqualTo("character varying:NO:'STANDARD'::character varying");
+    }
 }

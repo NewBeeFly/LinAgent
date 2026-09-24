@@ -22,7 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DataJdbcTest(properties = {
     "spring.sql.init.mode=always",
     "spring.sql.init.schema-locations=classpath:db/migration/V1__init.sql,"
-        + "classpath:db/migration/V3__compaction_anchor.sql,classpath:db/migration/V5__conversation_ownership.sql"
+        + "classpath:db/migration/V3__compaction_anchor.sql,classpath:db/migration/V5__conversation_ownership.sql,"
+        + "classpath:db/migration/V8__chat_mode.sql"
 })
 @Import(JdbcConverterConfig.class) // JSONB 列读取转换（PGobject -> String）
 @Testcontainers
@@ -44,7 +45,7 @@ class RepositoryTest {
     @Test
     void saveAndQueryConversationTurnMessage() {
         Conversation conv = conversations.save(
-            new Conversation(null, "测试会话", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "测试会话", "conv-1", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
 
         Turn turn = turns.save(new Turn(null, conv.id(), 1, "RUNNING",
             null, null, Instant.now(), null));
@@ -68,7 +69,7 @@ class RepositoryTest {
     @Test
     void compactSummaryRoundTrip() {
         Conversation conv = conversations.save(
-            new Conversation(null, "压缩会话", "conv-2", "此前会话摘要内容", 3, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "压缩会话", "conv-2", "此前会话摘要内容", 3, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
         Conversation reloaded = conversations.findById(conv.id()).orElseThrow();
         assertThat(reloaded.compactSummary()).isEqualTo("此前会话摘要内容");
         // V3 压缩锚点：记录已摘要到哪轮，与 compact_summary 同为记忆量纲的持久化字段
@@ -79,7 +80,7 @@ class RepositoryTest {
     void conversationTouchUpdatesUpdatedAt() {
         Instant past = Instant.parse("2020-01-01T00:00:00Z");
         Conversation conv = conversations.save(
-            new Conversation(null, "旧会话", "conv-3", null, 0, "default", "linmj", past, past));
+            new Conversation(null, "旧会话", "conv-3", null, 0, "default", "linmj", "STANDARD", past, past));
 
         conversations.touch(conv.id());
 
@@ -90,8 +91,8 @@ class RepositoryTest {
     @Test
     void findByTenantAndUserOrdersByUpdatedAtDesc() {
         Instant base = Instant.parse("2020-01-01T00:00:00Z");
-        conversations.save(new Conversation(null, "旧", "c-1", null, 0, "default", "linmj", base, base));
-        conversations.save(new Conversation(null, "新", "c-2", null, 0, "default", "linmj", base, base.plusSeconds(3600)));
+        conversations.save(new Conversation(null, "旧", "c-1", null, 0, "default", "linmj", "STANDARD", base, base));
+        conversations.save(new Conversation(null, "新", "c-2", null, 0, "default", "linmj", "STANDARD", base, base.plusSeconds(3600)));
 
         List<Conversation> ordered = conversations.findByTenantIdAndUserIdOrderByUpdatedAtDesc("default", "linmj");
         assertThat(ordered).extracting(Conversation::threadId).containsExactly("c-2", "c-1");
@@ -112,7 +113,7 @@ class RepositoryTest {
     @Test
     void turnLifecycleAndQueries() {
         Conversation conv = conversations.save(
-            new Conversation(null, "多轮会话", "conv-4", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "多轮会话", "conv-4", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
         Turn first = turns.save(Turn.running(conv.id(), 1));
         turns.save(first.complete("stop", "{\"total_tokens\":42}"));
         turns.save(Turn.running(conv.id(), 2));
@@ -135,7 +136,7 @@ class RepositoryTest {
     @Test
     void crossTurnTimelineOrdersByTurnSeqThenMessageSeq() {
         Conversation conv = conversations.save(
-            new Conversation(null, "跨轮会话", "conv-5", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "跨轮会话", "conv-5", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
         Turn t1 = turns.save(Turn.running(conv.id(), 1));
         Turn t2 = turns.save(Turn.running(conv.id(), 2));
 

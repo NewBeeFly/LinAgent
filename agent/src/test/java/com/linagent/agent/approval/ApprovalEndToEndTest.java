@@ -69,7 +69,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         + "classpath:db/migration/V3__compaction_anchor.sql,"
         + "classpath:db/migration/V5__conversation_ownership.sql,"
         + "classpath:db/migration/V6__permission_rule.sql,"
-        + "classpath:db/migration/V7__turn_waiting_approval.sql",
+        + "classpath:db/migration/V7__turn_waiting_approval.sql,"
+        + "classpath:db/migration/V8__chat_mode.sql",
     // OpenAI 自动装配占位 key（真实调用永不发生——scripted 模型 @Primary 全量接管）
     "spring.ai.openai.api-key=e2e-placeholder"
 })
@@ -153,7 +154,8 @@ class ApprovalEndToEndTest {
         Conversation first = conversations.save(
             Conversation.create(title, "pending-" + System.nanoTime(), CTX.tenantId(), CTX.userId(), Instant.now()));
         return conversations.save(new Conversation(first.id(), first.title(),
-            "conv-" + first.id(), null, 0, first.tenantId(), first.userId(), first.createdAt(), first.updatedAt()));
+            "conv-" + first.id(), null, 0, first.tenantId(), first.userId(),
+            first.mode(), first.createdAt(), first.updatedAt()));
     }
 
     @Test

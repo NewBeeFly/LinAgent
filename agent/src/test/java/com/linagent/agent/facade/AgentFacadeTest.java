@@ -121,7 +121,7 @@ class AgentFacadeTest {
     @Test
     void chatEmitsMetaDeltaTurnDoneAndPersistsCompleteMessages() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta m && m.model().equals("step-3.7-flash"))
@@ -150,7 +150,7 @@ class AgentFacadeTest {
     void chatWithoutCapturedUsageFallsBackToZeroUsageJson() {
         stubUsage = null;
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta)
@@ -170,7 +170,7 @@ class AgentFacadeTest {
     @Test
     void chatPersistsUserMessageWithSeqZero() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
         facade.chat(conv.id(), "问题").blockLast();
 
         assertThat(messages.findByConversationIdOrderByTurnIdAscSeqAsc(conv.id()).get(0).seq()).isEqualTo(0);
@@ -179,7 +179,7 @@ class AgentFacadeTest {
     @Test
     void thinkingAndToolEventsFromSideSinkAreMergedAndPersisted() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
         // side 流两种载荷形态：String（thinking 增量，来自 ThinkingTap）与
         // 已构造好的 AgentEvent.ToolCall（来自 EventEmittingToolInterceptor）
         stubSideEvents.add("思");
@@ -209,7 +209,7 @@ class AgentFacadeTest {
     @Test
     void chatErrorEmitsTurnErrorMarksTurnFailedAndKeepsStreamComplete() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
         stubMainFlux = Flux.error(new RuntimeException("模型连接失败"));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
@@ -229,7 +229,7 @@ class AgentFacadeTest {
     @Test
     void chatCancelMarksTurnFailedAndPersistsCompletedSegments() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
         // 主流发出首个 chunk 后挂起：订阅方在收到部分内容后取消（SSE 断连场景）
         stubMainFlux = Flux.just(stubStreamingOutput("回"))
             .concatWith(Flux.never());
@@ -258,7 +258,7 @@ class AgentFacadeTest {
     @Test
     void chatCancelAfterTurnDoneKeepsCompletedStatus() {
         Conversation conv = conversations.save(
-            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", Instant.now(), Instant.now()));
+            new Conversation(null, "t", "conv-1", null, 0, "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
 
         StepVerifier.create(facade.chat(conv.id(), "你好"))
             .expectNextMatches(e -> e instanceof AgentEvent.Meta)
@@ -557,7 +557,7 @@ class AgentFacadeTest {
         Conversation seed(String compactSummary) {
             long id = nextId;
             return save(new Conversation(null, "t", "conv-" + id, compactSummary, 0,
-                "default", "linmj", Instant.now(), Instant.now()));
+                "default", "linmj", "STANDARD", Instant.now(), Instant.now()));
         }
 
         @SuppressWarnings("unchecked")
@@ -565,7 +565,7 @@ class AgentFacadeTest {
             Long id = e.id() == null ? nextId++ : e.id();
             Conversation saved = new Conversation(id, e.title(), e.threadId(), e.compactSummary(),
                 e.compactedTurnSeq() == null ? 0 : e.compactedTurnSeq(),
-                e.tenantId(), e.userId(), e.createdAt(), e.updatedAt());
+                e.tenantId(), e.userId(), e.mode(), e.createdAt(), e.updatedAt());
             data.removeIf(c -> c.id().equals(id));
             data.add(saved);
             return (S) saved;
@@ -605,7 +605,7 @@ class AgentFacadeTest {
             findById(id).ifPresent(c ->
                 data.set(data.indexOf(c), new Conversation(c.id(), c.title(), c.threadId(),
                     c.compactSummary(), c.compactedTurnSeq(), c.tenantId(), c.userId(),
-                    c.createdAt(), Instant.now())));
+                    c.mode(), c.createdAt(), Instant.now())));
         }
     }
 

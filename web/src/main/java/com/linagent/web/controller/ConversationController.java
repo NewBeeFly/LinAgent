@@ -54,7 +54,7 @@ public class ConversationController {
         // 列停用（compacted_turn_seq 为 NOT NULL DEFAULT 0，按无锚点语义显式落 0）
         Conversation saved = conversations.save(new Conversation(first.id(), first.title(),
             "conv-" + first.id(), null, 0,
-            first.tenantId(), first.userId(), first.createdAt(), first.updatedAt()));
+            first.tenantId(), first.userId(), first.mode(), first.createdAt(), first.updatedAt()));
         return new ConversationResponse(saved.id(), saved.title(), 0, saved.updatedAt().toString());
     }
 

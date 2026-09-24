@@ -74,7 +74,7 @@ class ConversationControllerTest {
             if (e.id() == null) {
                 return new com.linagent.agent.persistence.po.Conversation(1L, e.title(), e.threadId(),
                     e.compactSummary(), e.compactedTurnSeq(), e.tenantId(), e.userId(),
-                    e.createdAt(), e.updatedAt());
+                    e.mode(), e.createdAt(), e.updatedAt());
             }
             return e;
         });
@@ -99,7 +99,7 @@ class ConversationControllerTest {
             if (e.id() == null) {
                 return new com.linagent.agent.persistence.po.Conversation(1L, e.title(), e.threadId(),
                     e.compactSummary(), e.compactedTurnSeq(), e.tenantId(), e.userId(),
-                    e.createdAt(), e.updatedAt());
+                    e.mode(), e.createdAt(), e.updatedAt());
             }
             return e;
         });
@@ -123,7 +123,7 @@ class ConversationControllerTest {
     void listReturnsConversationsWithTurnCount() throws Exception {
         when(conversations.findByTenantIdAndUserIdOrderByUpdatedAtDesc(any(), any())).thenReturn(List.of(
             new com.linagent.agent.persistence.po.Conversation(1L, "会话A", "conv-1", null, 0, "default", "linmj",
-                java.time.Instant.now(), java.time.Instant.now())));
+                "STANDARD", java.time.Instant.now(), java.time.Instant.now())));
         when(turns.countByConversationId(1L)).thenReturn(3);
 
         mockMvc.perform(get("/api/conversations").headers(authHeaders))
