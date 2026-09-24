@@ -203,7 +203,7 @@ class ChatModesEndToEndTest {
 
         // AUTO 档 prompt 不含纯聊声明（档位声明只在 CHAT 档追加）
         assertThat(scriptedModel.receivedPerCall().get(0))
-            .noneSatisfy(text -> assertThat(text).contains("系统未向你提供任何工具"));
+            .noneSatisfy(text -> assertThat(text).contains("纯对话模式"));
 
         // 展示层完整留痕：USER + 执行轨迹 TOOL_CALL/TOOL_RESULT（同 callId 各一行）+ 收口 TEXT
         List<Message> rows = messages.findByTurnIdOrderBySeq(dones.get(0).turnId());
@@ -229,7 +229,7 @@ class ChatModesEndToEndTest {
 
         // 模型收到的 system prompt 含纯聊声明（spec §2.3，防口头承诺做事）
         assertThat(scriptedModel.receivedPerCall().get(0))
-            .anySatisfy(text -> assertThat(text).contains("忽略对话历史中出现过的任何工具调用示例"));
+            .anySatisfy(text -> assertThat(text).contains("当前会话没有为你配置任何工具"));
 
         // 无工具可调：调用未执行、无工具/审批事件、目录未出现
         assertThat(events).noneMatch(AgentEvent.ToolCall.class::isInstance);

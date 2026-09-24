@@ -376,9 +376,14 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
         </article>
       </div>
 
-      <!-- 会话模式切换器：输入框上方三段（自由红警/标准/纯聊），切档 409 走全局横幅 -->
-      <div class="mode-bar" v-if="activeConversation">
-        <div class="mode-switch" role="group" aria-label="切换会话模式">
+      <div class="composer">
+        <div class="composer-row">
+          <textarea v-model="input" @keydown.enter.exact.prevent="send"
+                    :placeholder="inputPlaceholder" :disabled="sending" rows="2" />
+          <button class="send" @click="send" :disabled="sending || !activeId">发送</button>
+        </div>
+        <!-- 会话模式切换器：聊天框左下角紧凑三段（自由红警/标准/纯聊），切档 409 走全局横幅 -->
+        <div class="mode-switch" v-if="activeConversation" role="group" aria-label="切换会话模式">
           <button v-for="m in CHAT_MODES" :key="m" class="mode-btn"
                   :class="{ active: m === activeMode, danger: modeMeta(m).danger }"
                   :aria-pressed="m === activeMode" :disabled="switchingMode"
@@ -387,12 +392,6 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
             {{ modeMeta(m).icon }} {{ modeMeta(m).label }}
           </button>
         </div>
-      </div>
-
-      <div class="composer">
-        <textarea v-model="input" @keydown.enter.exact.prevent="send"
-                  :placeholder="inputPlaceholder" :disabled="sending" rows="2" />
-        <button class="send" @click="send" :disabled="sending || !activeId">发送</button>
       </div>
     </main>
   </div>
@@ -566,7 +565,7 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
 }
 
 /* ============ 会话模式切换器 ============ */
-/* 切换器贴输入框（mode-bar 与 composer 同宽），header 只留标题 */
+/* header 只留标题；切换器嵌在 composer 左下角（紧凑小尺寸） */
 .chat-header {
   display: flex;
   align-items: center;
@@ -574,12 +573,6 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
   max-width: calc(var(--content-width) + 48px);
   margin: 0 auto;
   padding: 12px 24px 2px;
-}
-.mode-bar {
-  width: 100%;
-  max-width: calc(var(--content-width) + 48px);
-  margin: 0 auto;
-  padding: 0 24px 4px;
 }
 .chat-title {
   flex: 0 1 auto;
@@ -686,13 +679,18 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
 
 /* ============ 输入区 ============ */
 .composer {
-  display: flex;
-  gap: 10px;
-  padding: 14px 24px 20px;
-  max-width: calc(var(--content-width) + 48px);
-  width: 100%;
-  margin: 0 auto;
-}
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 24px 14px;
+    max-width: calc(var(--content-width) + 48px);
+    width: 100%;
+    margin: 0 auto;
+  }
+  .composer-row {
+    display: flex;
+    gap: 10px;
+  }
 .composer textarea {
   flex: 1;
   resize: none;
@@ -753,7 +751,6 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
   .sidebar.open { transform: none; }
   /* 顶部让位给 fixed ☰ 与身份切换器：标题隐藏，header 承接原 timeline 的顶部间距 */
   .chat-header { padding: 58px 16px 2px; }
-  .mode-bar { padding: 0 16px 4px; }
   .chat-title { display: none; }
   .timeline { padding: 8px 16px 8px; }
   .composer { padding: 10px 16px 16px; }

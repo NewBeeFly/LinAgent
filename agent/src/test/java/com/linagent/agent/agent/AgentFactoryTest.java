@@ -67,11 +67,13 @@ class AgentFactoryTest {
         assertThat(auto.mode()).isEqualTo(ChatMode.AUTO);
         assertThat(chat.mode()).isEqualTo(ChatMode.CHAT);
 
-        // CHAT：prompt = 缓存串 + 追加声明（防模型口头承诺做事——协议层无 tools）
+        // CHAT：prompt = 专用精简模板（正向声明纯对话、全文无工具说明——不再拼接通用串）
         assertThat(chat.systemPrompt())
-            .startsWith(standard.systemPrompt())
-            .contains("系统未向你提供任何工具")
-            .contains("不要输出工具调用格式");
+            .contains("纯对话模式")
+            .contains("当前会话没有为你配置任何工具")
+            .startsWith("# LinAgent 纯对话助手");
+        // 专用模板：不含通用串的工具说明（正向精简而非否定追加）
+        assertThat(chat.systemPrompt()).doesNotContain("read_file");
         // AUTO/STANDARD：system prompt 保持缓存串原样
         assertThat(auto.systemPrompt()).isEqualTo(standard.systemPrompt());
     }

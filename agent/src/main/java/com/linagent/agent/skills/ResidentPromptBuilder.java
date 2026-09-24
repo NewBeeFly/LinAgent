@@ -72,5 +72,29 @@ public class ResidentPromptBuilder {
     /** autoReload 场景：清缓存后下次 build 重新扫描 */
     public void invalidateCache() {
         cached = null;
+        chatCached = null;
     }
+
+    private volatile String chatCached;
+
+    /**
+     * CHAT（纯聊档）专用精简模板：正向声明纯对话助手、全文无工具说明——实测（2026-09-24）
+     * 通用串+尾部否定追加压不住对话历史里的工具模仿，前文几百行工具说明必须整体移除。
+     * 不做技能注入（纯聊档不挂技能 hook）。
+     */
+    public String buildChat() {
+        String snapshot = chatCached;
+        if (snapshot != null && !snapshot.isBlank()) {
+            return snapshot;
+        }
+        try {
+            String result = readTemplate(CHAT_PROMPT_TEMPLATE, getClass().getClassLoader());
+            this.chatCached = result;
+            return result;
+        } catch (IOException e) {
+            throw new IllegalStateException("加载纯聊 system prompt 模板失败", e);
+        }
+    }
+
+    static final String CHAT_PROMPT_TEMPLATE = "prompts/system-prompt-chat.md";
 }

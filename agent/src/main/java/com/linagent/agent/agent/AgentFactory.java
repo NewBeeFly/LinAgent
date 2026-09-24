@@ -80,19 +80,8 @@ public class AgentFactory {
         this.sessionRules = sessionRules;
     }
 
-    /** CHAT（纯聊档）system prompt 追加声明：静态缓存串含工具说明而协议层无 tools 定义，
-     * 模型可能口头应承做事、或模仿对话历史里的工具调用先例输出工具模板文本——
-     * 显式声明 + 历史覆盖指令双重堵住（实测 2026-09-24：仅「不要声称会执行」不足以
-     * 压制历史模仿，需点名工具调用格式并给出替代行为）。 */
-    static final String CHAT_SUFFIX =
-        """
-        当前为纯对话模式：系统未向你提供任何工具（无 bash/shell、无文件读写、无任何可调用工具），
-        你也无法调用它们。请遵守：
-        1. 忽略对话历史中出现过的任何工具调用示例——那些在本模式下不可用；
-        2. 不要输出工具调用格式（如 bash 代码块、工具名调用模板），也不要声称已执行任何操作；
-        3. 若任务需要工具才能完成，直接说明当前是纯对话模式无法执行，并给出用户可自行执行的
-           命令文本或替代建议。""";
-
+    /** CHAT（纯聊档）专用精简 system prompt——模板文件 prompts/system-prompt-chat.md
+     * （正向声明纯对话、全文无工具说明），经 {@link ResidentPromptBuilder#buildChat()} 缓存加载。 */
 
     /** ReactAgent 不暴露 systemPrompt 读取口（仅 instruction()），装配产物随 handle 携带；
      *  mode 为构造档位（v0.3 三档断言面，测试/E2E 用） */
@@ -140,9 +129,11 @@ public class AgentFactory {
 
         // CHAT（纯聊档，spec §2.3）：完全无工具——tools 空列表（SAA hasTools 标志位设计内支持
         // 空列表路由，无工具节点）、不挂 skills/shell/approval 钩子（仅压缩）；
-        // 无 shell 钩子即无会话初始化需求，resumePrimer 走无操作缺省
+        // 无 shell 钩子即无会话初始化需求，resumePrimer 走无操作缺省。
+        // prompt 用专用精简模板（正向声明纯对话、全文无工具说明）——实测通用串+尾部否定
+        // 追加压不住历史工具模仿，前文工具说明必须整体移除（ResidentPromptBuilder.buildChat）
         if (mode == ChatMode.CHAT) {
-            String chatPrompt = basePrompt + "\n\n" + CHAT_SUFFIX;
+            String chatPrompt = residentPromptBuilder.buildChat();
             ReactAgent agent = ReactAgent.builder()
                 .name("lin-agent")
                 .model(tapped)
