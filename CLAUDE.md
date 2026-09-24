@@ -76,21 +76,24 @@ reactor 线程，届时已清理——defer 内读取是已实证的坑）。工
 
 ### 工具审批 HITL（approval 包）
 
-- 判定引擎 `PermissionRuleEngine`（纯逻辑无 IO，每轮随 userRules 查库新建）：评估序 **BUILTIN 白名单（shell 只读 20 命令）→ session（`InMemorySessionRules`，key=tenant:user:conv:tool）→ user（permission_rule 表 V6，UNIQUE 四键冲突安全落库）→ 待审批**，命中即放行。`*` 段通配（`pip install *` 命中 `pip install pandas`、不命中 `pip installx`）；复合命令按 `&&/||/;/|` 拆段**全命中才放行**；段含 `>`/`<`/`$(`/反引号/`find -delete|-exec` 即丧失 BUILTIN 资格（fail-safe 落审批）；read_file/list_dir/csv_summary/read_skill 恒放行（越界校验归工具层）。
+- 判定引擎 `PermissionRuleEngine`（纯逻辑无 IO，每轮随 userRules 查库新建）：评估序 **BUILTIN 白名单（shell 只读 20 命令）→ session（`InMemorySessionRules`，key=tenant:user:conv:tool）→ user（permission_rule 表 V6，UNIQUE 四键冲突安全落库）→ 待审批**，命中即放行。`*` 段通配（`pip install *` 命中 `pip install pandas`、不命中 `pip installx`）；复合命令按 `&&/||/;/|/\n/\r/&` 拆段**全命中才放行**（换行与单 & 是实证过的绕过向量——bash 视为分隔/链接符）；段含 `>`/`<`/`>>`/`$(`/反引号/`find -delete|-exec|-fprint*/-fls/-fprintf`/`--output` 即丧失 BUILTIN 资格（fail-safe 落审批，终审 C1-C3 修复）；read_file/list_dir/csv_summary/read_skill 恒放行（越界校验归工具层）。
 - `ApprovalHook`（抄 SAA `HumanInTheLoopHook` 骨架、判定层换引擎；每轮随 AgentFactory 构造，非 Bean）：工具节点前 `interrupt()` 判定 → 中断（checkpoint 持久化）→ 流尾 `AgentEvent.ApprovalRequest`（**不发 TurnDone**）+ 待审批 TOOL_CALL 提前落 message 表 + turn.status=WAITING_APPROVAL（V7 放宽 turn_status_check）。
 - resume：`POST /api/conversations/{id}/approvals` 整批 per-callId 决策 + remember once|session|forever（forever 服务端按 `suggestPattern` 重算落库）→ `agent.stream(Map.of(), config.addMetadata(HUMAN_FEEDBACK_METADATA_KEY, InterruptionMetadata))` 续流 SSE（续跑再中断则再发 ApprovalRequest，递归语义）；`GET .../approvals` 刷新恢复；chat 遇 WAITING_APPROVAL → 409（先决议后继续）；`/api/permission-rules` CRUD 三端点；前端 ApprovalCard / 409 横幅 / 设置页（哈希路由 `#/settings/permissions`）。
 - 拒绝语义：REJECTED+理由作为 tool result 回传模型（SAA 内置文案），模型据此调整方案自然收尾；审批对模型透明（从不询问模型）。
+- 展示层去重：中断预落与 resume 执行的**同 callId TOOL_CALL 只落一行**（`SegmentBuffer.recordedCallIds` + `markRecorded`，resume 构造 buffer 时从既有行收集；重复调用仍 flush 段落）；`suggestPattern` 单 token/根级文件返回精确值而非 `*`（防「永久允许」静默放行整工具）；批量 remember 前端取**最弱档**（任一 plain approve → once，宁可少记不可多记）；并发双决议由 `claimWaitingTurn`（@Modifying CAS UPDATE WHERE status='WAITING_APPROVAL'）占轮裁决。
 
 ## 实证过的坑（SAA 1.1.2.3 / Spring AI 1.1.2，勿凭记忆推翻）
 
 - 依赖栈是**精简版 spring-ai-model**：`ToolCallbacks.from()` 不存在 → 用 `MethodToolCallbackProvider.builder().toolObjects(obj).build().getToolCallbacks()`。
 - `AssistantMessage` 无双参 public 构造器 → 用 builder。
 - StepFun `reasoning_content` 落在 `result.output.metadata["reasoningContent"]`（ThinkingExtractor 首选键）；流末尾有**无 choices 的 usage 尾包**（getResult()==null，消费必须判空）；thinking 尾与 text 首可能同 chunk。
+- StepFun **空正文边缘**（2026-09-24 实证）：resume 后第二次调用约 1/8 概率模型把最终答复写进 reasoning 后直接 EOS（坏例 completionTokens=10 仅覆盖思考量，好例 31~95）——非管道 bug。前端 `executedWithoutText` 渲染「✅ 已执行（模型未返回文本回复）」兜底；排查口径看 completionTokens 与 TEXT 落库的对应。
 - `agent.stream(UserMessage, RunnableConfig)` 抛**受检** GraphRunnerException；`StreamingOutput.chunk()` 已弃用，从 Message 提取。
 - SAA `SkillRegistry` 签名：`get` 返回 `Optional<SkillMetadata>`、`readSkillContent` 返回 String 缺失抛 ISE、`SkillMetadata.getName()`；实现 FilteredSkillRegistry 时 `getByPath/disable/isDisabled` 必须 override（default 实现会漏过滤）。
 - `PostgresSaver` 不在 starter-memory-jdbc 里（那个只有已弃用的 ChatMemoryRepository 体系），在 graph-core。V2__checkpoint.sql 的 DDL 必须与 saver 内置 DDL 逐字符一致，saver 以 CREATE_NONE 模式初始化（DDL 归 Flyway 管）。
 - JSONB 直写需要 JDBC URL 带 `?stringtype=unspecified`（已固化在 application.yml 的 url 模板；`@ServiceConnection` 测试容器要用 `withUrlParam` 补）。
 - system prompt 模板（`agent/src/main/resources/prompts/system-prompt.md`）**启动时缓存**（ResidentPromptBuilder），改完必须重启后端才生效。
+- 技能清单 `listAll()` **按 name 排序**后注入：文件系统遍历顺序不保证稳定，清单字节抖动 = 每轮 system prompt 变化 = StepFun 前缀缓存全失效（`FileSystemSkillRegistry` 的 listAll 排序是刻意的，勿当多余代码删）。
 - `mvn -pl web spring-boot:run` fork 出的 JVM **工作目录是 web 模块目录**：`agent.skills-root`/`agent.workspace-root` 这类相对路径配置裸解析会落到 `web/skills`（不存在）导致 0 技能加载（0 技能时模型会幻觉编造技能名）。必须经 `ProjectPathResolver.resolveDir`（cwd → 父目录上溯一级）解析，直接 `Path.of(相对路径)` 是回归。
 - @WebMvcTest 切片会自动装配 Filter 类型 Bean：AuthContextFilter 落地后所有 @WebMvcTest 必须 @MockBean RequestAuthenticator 并打桩（返回 TestAuth.LINMJ_CTX），否则 401/上下文失败。
 - `ReactAgent.initGraph` 只对**具体类型** `HumanInTheLoopHook`/`InterruptionHook` 把 hook 实例注册为节点 action（实现 InterruptableAction，apply 前会调 `interrupt()`）；其余自定义 ModelHook 一律被 lambda 包装（仅 afterModel）→ `interrupt()` **永不触发**——审批静默失效、工具直执行，无任何报错。修复：`AgentFactory.registerInterruptibleApprovalNode`——图编译后反射换 `CompiledGraph.nodeFactories` 中该节点的 action 为 hook 本体（节点名按 `getFullHookName` 前缀定位、不硬编码位置后缀；找不到节点/反射失败一律响亮抛 ISE——静默降级=审批整体失效）；`ApprovalEndToEndTest` E2E 守护。`HumanInTheLoopHook` 构造器 private 无法继承。**SAA 升级必须回归此点**。
