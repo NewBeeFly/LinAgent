@@ -94,3 +94,15 @@ export function batchRememberLevel(choices: readonly ApprovalChoice[]): 'once' |
   if (choices.includes('session')) return 'session'
   return 'forever'
 }
+
+/**
+ * 完成且无正文但有成功工具：StepFun 低概率把最终答复写进 reasoning 后直接结束
+ * （resume 后第二次调用约 1/8，completionTokens 仅覆盖思考量——2026-09-24 实证）。
+ * 渲染层据此显示轻提示，替代空白的正文区。
+ */
+export function executedWithoutText(turn: ChatTurn): boolean {
+  return turn.status === 'done'
+    && !turn.text
+    && !turn.errorText
+    && turn.tools.some(t => t.success)
+}

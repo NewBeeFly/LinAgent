@@ -154,4 +154,26 @@ class SegmentBufferTest {
             .containsExactlyElementsOf(
                 java.util.stream.IntStream.rangeClosed(1, seqs.size()).boxed().toList());
     }
+
+    // ===== 审批重复落库修复：中断预落 + resume 执行再落，同 callId 只落一行 =====
+
+    @Test
+    void recordToolCallSkipsDuplicateCallIdButStillFlushesSegments() {
+        RecordingRepo repo = new RecordingRepo();
+        SegmentBuffer buffer = new SegmentBuffer(1L, repo);
+        buffer.markRecorded("call-1"); // resume 续跑：中断预落的 callId 已在库
+
+        buffer.appendThinking("思");
+        buffer.appendText("文");
+        buffer.recordToolCall("call-1", "write_file", "{}"); // 执行期重复 → 跳过落库但 flush 段落
+
+        assertThat(repo.saved.stream().filter(m -> "TOOL_CALL".equals(m.msgType()))).isEmpty();
+        assertThat(repo.saved.stream().filter(m -> "THINKING".equals(m.msgType()))).hasSize(1);
+        assertThat(repo.saved.stream().filter(m -> "TEXT".equals(m.msgType()))).hasSize(1);
+
+        // 未标记的 callId 不受影响（正常执行路径）
+        buffer.recordToolCall("call-2", "shell", "{}");
+        assertThat(repo.saved.stream()
+            .filter(m -> "TOOL_CALL".equals(m.msgType()) && "call-2".equals(m.callId()))).hasSize(1);
+    }
 }

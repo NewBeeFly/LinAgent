@@ -139,15 +139,20 @@ public class AgentFacade {
             // 占轮已置 RUNNING；resumed() 复写运行时字段语义（finish/finishedAt 清空）
             Turn turn = turns.save(waiting.resumed());
 
-            // 展示层 seq 续接：中断前已落行（USER/TEXT/TOOL_CALL...）之后继续
+            // 展示层 seq 续接：中断前已落行（USER/TEXT/TOOL_CALL...）之后继续；
+            // 中断预落的 TOOL_CALL callId 标记进 buffer——resume 执行期同 callId 不重复落行
             List<Message> existing = messages.findByTurnIdOrderBySeq(turn.id());
             int startSeq = existing.isEmpty() ? 1 : existing.get(existing.size() - 1).seq() + 1;
+            SegmentBuffer resumeBuffer = new SegmentBuffer(turn.id(), messages, startSeq);
+            existing.stream()
+                .filter(m -> "TOOL_CALL".equals(m.msgType()) && m.callId() != null)
+                .forEach(m -> resumeBuffer.markRecorded(m.callId()));
 
             RunnableConfig config = RunnableConfig.builder()
                 .threadId(conv.threadId())
                 .addMetadata(RunnableConfig.HUMAN_FEEDBACK_METADATA_KEY, feedback)
                 .build();
-            return runTurn(conv, ctx, turn, new SegmentBuffer(turn.id(), messages, startSeq),
+            return runTurn(conv, ctx, turn, resumeBuffer,
                 // 续跑不经过 BEFORE_AGENT 节点（shell 会话等运行时初始化缺席），handle 携带
                 // 的 resumePrimer 先行补齐，再开流
                 handle -> {

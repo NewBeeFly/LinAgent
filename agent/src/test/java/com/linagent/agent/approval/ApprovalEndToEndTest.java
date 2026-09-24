@@ -220,11 +220,15 @@ class ApprovalEndToEndTest {
         assertThat(dones.get(0).finishReason()).isEqualTo("STOP");
         assertThat(turns.findById(approval.turnId()).orElseThrow().status()).isEqualTo("COMPLETED");
 
-        // 展示层完整留痕：USER 1 条（resume 不新增用户行）+ 批准执行轨迹 TOOL_CALL×2/TOOL_RESULT + 收口 TEXT
+        // 展示层完整留痕：USER 1 条（resume 不新增用户行）+ 执行轨迹 TOOL_CALL（同 callId
+        // 去重——中断预落与执行期不重复落行）+ TOOL_RESULT + 收口 TEXT
         List<Message> finalRows = messages.findByTurnIdOrderBySeq(approval.turnId());
         assertThat(finalRows).extracting(Message::msgType)
-            .containsExactly("USER", "TOOL_CALL", "TOOL_CALL", "TOOL_RESULT", "TEXT");
+            .containsExactly("USER", "TOOL_CALL", "TOOL_RESULT", "TEXT");
         assertThat(finalRows.stream().filter(m -> "USER".equals(m.msgType()))).hasSize(1);
+        List<Message> callRows = finalRows.stream().filter(m -> "TOOL_CALL".equals(m.msgType())).toList();
+        assertThat(callRows).hasSize(1);
+        assertThat(callRows.get(0).callId()).isEqualTo("call-1");
     }
 
     @Test

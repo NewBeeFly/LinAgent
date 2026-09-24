@@ -5,7 +5,7 @@ import { createConversation, fetchIdentityOptions, getPendingApproval, getTurns,
 import type { TenantIdentityOptions } from './api/rest'
 import { ApiError } from './api/error'
 import { currentIdentity, setIdentity } from './api/identity'
-import { applySseEvent, failTurn, newTurn, thinkingActive, turnFromRecord } from './turn'
+import { applySseEvent, executedWithoutText, failTurn, newTurn, thinkingActive, turnFromRecord } from './turn'
 import type { ApprovalDecisionPayload, ChatTurn, TurnRecord } from './types'
 import ThinkingBlock from './components/ThinkingBlock.vue'
 import ToolCard from './components/ToolCard.vue'
@@ -317,6 +317,7 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
                           @submit="submitApproval(turn, $event)" />
             <MessageBubble role="assistant" :content="turn.text"
                            :streaming="turn.status === 'streaming' && !!turn.text" v-if="turn.text" />
+            <p class="silent-done" v-else-if="executedWithoutText(turn)">✅ 已执行（模型未返回文本回复）</p>
             <p class="error-line" v-if="turn.errorText">{{ turn.errorText }}</p>
           </div>
         </article>
@@ -460,6 +461,13 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
   border-radius: 1px;
 }
 .rail > * { position: relative; }
+
+/* 模型空正文边缘（思考里答完即止）：工具已成功的轻提示 */
+.silent-done {
+  margin: 4px 0;
+  color: var(--text-tertiary, #8a8f98);
+  font-size: 13px;
+}
 
 .error-line {
   color: var(--danger);

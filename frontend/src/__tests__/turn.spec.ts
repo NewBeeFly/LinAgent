@@ -238,3 +238,36 @@ describe('batchRememberLevel（审批整批 remember 档位，min 语义）', ()
     expect(batchRememberLevel(['reject'])).toBe('forever') // 后端仅对 approve 项写规则，无副作用
   })
 })
+
+describe('executedWithoutText（StepFun 空正文边缘：模型把答复写进思考直接结束）', () => {
+  it('done 且无正文且有成功工具 → true（渲染轻提示）', async () => {
+    const { executedWithoutText } = await import('../turn')
+    const turn = newTurn('执行')
+    applySseEvent(turn, { event: 'tool_call', data: { callId: 'c1', toolName: 'write_file', arguments: '{}' } })
+    applySseEvent(turn, { event: 'tool_result', data: { callId: 'c1', result: 'ok', success: true, durationMs: 3 } })
+    applySseEvent(turn, { event: 'turn_done', data: {} })
+    expect(turn.status).toBe('done')
+    expect(executedWithoutText(turn)).toBe(true)
+  })
+
+  it('有正文 → false（正常轮不提示）', async () => {
+    const { executedWithoutText } = await import('../turn')
+    const turn = newTurn('你好')
+    applySseEvent(turn, { event: 'message_delta', data: { content: '答' } })
+    applySseEvent(turn, { event: 'turn_done', data: {} })
+    expect(executedWithoutText(turn)).toBe(false)
+  })
+
+  it('工具失败或 errorText 存在 → false（错误已有自己的呈现）', async () => {
+    const { executedWithoutText } = await import('../turn')
+    const failed = newTurn('执行')
+    applySseEvent(failed, { event: 'tool_call', data: { callId: 'c1', toolName: 'write_file', arguments: '{}' } })
+    applySseEvent(failed, { event: 'tool_result', data: { callId: 'c1', result: 'x', success: false, durationMs: 1 } })
+    applySseEvent(failed, { event: 'turn_done', data: {} })
+    expect(executedWithoutText(failed)).toBe(false)
+
+    const errored = newTurn('执行')
+    applySseEvent(errored, { event: 'error', data: { code: 'X' } })
+    expect(executedWithoutText(errored)).toBe(false)
+  })
+})

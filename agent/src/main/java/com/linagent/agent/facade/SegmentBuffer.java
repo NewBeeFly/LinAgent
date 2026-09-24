@@ -24,6 +24,8 @@ public class SegmentBuffer {
     private final Long turnId;
     private final MessageRepository repository;
     private final AtomicInteger seq;
+    /** 已落库的 callId（resume 续跑时中断预落行计入）：执行期重复 recordToolCall 只 flush 段落不重复落行 */
+    private final java.util.Set<String> recordedCallIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final StringBuilder thinking = new StringBuilder();
     private final StringBuilder text = new StringBuilder();
 
@@ -60,11 +62,19 @@ public class SegmentBuffer {
         }
     }
 
-    /** 工具调用边界：flush 残留段 + 落 TOOL_CALL 必须原子（同一临界区），否则 seq 交错 */
+    /** 工具调用边界：flush 残留段 + 落 TOOL_CALL 必须原子（同一临界区），否则 seq 交错。
+     *  同 callId 重复（审批中断预落 + resume 执行再落）只 flush 段落、不重复落行。 */
     public synchronized void recordToolCall(String callId, String toolName, String arguments) {
         flushThinking();
         flushText();
-        repository.save(Message.toolCall(turnId, nextSeq(), callId, toolName, arguments));
+        if (recordedCallIds.add(callId)) {
+            repository.save(Message.toolCall(turnId, nextSeq(), callId, toolName, arguments));
+        }
+    }
+
+    /** resume 续跑标记：中断前已预落的 callId（防执行期 recordToolCall 重复落行） */
+    public synchronized void markRecorded(String callId) {
+        recordedCallIds.add(callId);
     }
 
     public synchronized void recordToolResult(String callId, String toolName, String result,
