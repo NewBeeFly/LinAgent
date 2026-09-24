@@ -6,12 +6,13 @@ import type { ConversationSummary, TenantIdentityOptions } from './api/rest'
 import { ApiError } from './api/error'
 import { currentIdentity, setIdentity } from './api/identity'
 import { applySseEvent, executedWithoutText, failTurn, newTurn, thinkingActive, turnFromRecord } from './turn'
-import { CHAT_MODES, isChatOnly, modeMeta } from './modes'
+import { isChatOnly } from './modes'
 import type { ApprovalDecisionPayload, ChatTurn, TurnRecord } from './types'
 import ThinkingBlock from './components/ThinkingBlock.vue'
 import ToolCard from './components/ToolCard.vue'
 import MessageBubble from './components/MessageBubble.vue'
 import ApprovalCard from './components/ApprovalCard.vue'
+import ModePicker from './components/ModePicker.vue'
 import PermissionSettings from './views/PermissionSettings.vue'
 
 // 轻量哈希路由（无 vue-router 依赖，单设置页不值得引入）：#/settings/permissions ↔ 权限设置
@@ -377,20 +378,19 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
       </div>
 
       <div class="composer">
-        <div class="composer-row">
+        <!-- 输入卡片：textarea 置顶 + 底部工具行（左模式切换 / 右发送），不再独占整行 -->
+        <div class="input-card">
           <textarea v-model="input" @keydown.enter.exact.prevent="send"
                     :placeholder="inputPlaceholder" :disabled="sending" rows="2" />
-          <button class="send" @click="send" :disabled="sending || !activeId">发送</button>
-        </div>
-        <!-- 会话模式切换器：聊天框左下角紧凑三段（自由红警/标准/纯聊），切档 409 走全局横幅 -->
-        <div class="mode-switch" v-if="activeConversation" role="group" aria-label="切换会话模式">
-          <button v-for="m in CHAT_MODES" :key="m" class="mode-btn"
-                  :class="{ active: m === activeMode, danger: modeMeta(m).danger }"
-                  :aria-pressed="m === activeMode" :disabled="switchingMode"
-                  :title="modeMeta(m).danger ? '自由档：工具调用免审批，风险自担' : undefined"
-                  @click="switchMode(m)">
-            {{ modeMeta(m).icon }} {{ modeMeta(m).label }}
-          </button>
+          <div class="input-toolbar">
+            <!-- 会话模式切换：下拉内嵌工具行（AUTO 红警态触发器红字常驻），切档 409 走全局横幅 -->
+            <ModePicker v-if="activeConversation" :mode="activeMode" :disabled="switchingMode"
+                        @change="switchMode" />
+            <span class="toolbar-spacer"></span>
+            <button class="send" @click="send" :disabled="sending || !activeId" aria-label="发送">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5" /><path d="M5 12l7-7 7 7" /></svg>
+            </button>
+          </div>
         </div>
       </div>
     </main>
@@ -584,39 +584,6 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mode-switch {
-  flex: none;
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-}
-.mode-btn {
-  border: none;
-  background: transparent;
-  color: var(--ink-faint);
-  border-radius: 999px;
-  padding: 4px 12px;
-  font-size: 12.5px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.mode-btn:hover { color: var(--ink); }
-.mode-btn.active {
-  background: var(--pine-soft);
-  color: var(--pine-deep);
-  font-weight: 600;
-}
-.mode-btn:disabled { opacity: 0.55; cursor: default; }
-/* 自由档红警：免审批高危，idle 红字 / active 红底，与另两档形成风险对比 */
-.mode-btn.danger { color: var(--danger); }
-.mode-btn.danger.active {
-  background: var(--danger-soft);
-  color: var(--danger);
-  font-weight: 600;
-}
 
 /* ============ 欢迎面板 ============ */
 .welcome { padding: 10vh 8px 0; }
@@ -677,47 +644,69 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
   color: var(--pine);
 }
 
-/* ============ 输入区 ============ */
+/* ============ 输入区（卡片式：textarea 置顶 + 底部工具行） ============ */
 .composer {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 14px 24px 14px;
-    max-width: calc(var(--content-width) + 48px);
-    width: 100%;
-    margin: 0 auto;
-  }
-  .composer-row {
-    display: flex;
-    gap: 10px;
-  }
-.composer textarea {
-  flex: 1;
-  resize: none;
+  padding: 14px 24px 16px;
+  max-width: calc(var(--content-width) + 48px);
+  width: 100%;
+  margin: 0 auto;
+}
+.input-card {
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  padding: 11px 16px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+/* 卡片承载焦点环（textarea 去边框去 outline，键盘焦点仍可见） */
+.input-card:focus-within {
+  border-color: var(--pine);
+  box-shadow: 0 0 0 2px var(--pine-soft);
+}
+.input-card textarea {
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 12px 16px 6px;
   font-family: inherit;
   font-size: 15px;
   line-height: 1.6;
   color: var(--ink);
 }
-.composer textarea:focus-visible {
-  outline: none;
-  border-color: var(--pine);
-  box-shadow: 0 0 0 2px var(--pine-soft);
+.input-card textarea::placeholder { color: var(--ink-faint); }
+.input-card textarea:disabled { opacity: 0.6; }
+.input-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 8px 12px;
 }
+.toolbar-spacer { flex: 1; }
+/* 参考紧凑输入框范式：图标化发送键收进工具行右端 */
 .send {
-  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
   border: none;
   background: var(--pine);
   color: #fff;
-  border-radius: var(--radius-md);
-  padding: 12px 22px;
-  font-size: 14.5px;
-  font-weight: 500;
+  border-radius: 10px;
   cursor: pointer;
+}
+.send svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .send:hover { background: var(--pine-deep); }
 .send:disabled { opacity: 0.45; cursor: default; }
